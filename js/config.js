@@ -78,6 +78,7 @@
     S('hitting', 'onBasePercentage', 'OBP', 'On-base percentage'),
     S('hitting', 'sluggingPercentage', 'SLG', 'Slugging percentage'),
     S('hitting', 'onBasePlusSlugging', 'OPS', 'On-base plus slugging'),
+    S('hitting', 'war', 'WAR', 'Wins above replacement (position players)'),
     S('hitting', 'homeRuns', 'HR', 'Home runs'),
     S('hitting', 'runsBattedIn', 'RBI', 'Runs batted in'),
     S('hitting', 'runs', 'R', 'Runs scored'),
@@ -108,6 +109,7 @@
 
     S('pitching', 'earnedRunAverage', 'ERA', 'Earned run average'),
     S('pitching', 'walksAndHitsPerInningPitched', 'WHIP', 'Walks + hits per inning'),
+    S('pitching', 'war', 'WAR', 'Wins above replacement (pitchers)'),
     S('pitching', 'strikeouts', 'K', 'Strikeouts (pitching)'),
     S('pitching', 'wins', 'W', 'Wins'),
     S('pitching', 'losses', 'L', 'Losses'),
@@ -173,6 +175,9 @@
   ];
   X.STAT_BY_KEY = {};
   X.STATS.forEach(function (s) { X.STAT_BY_KEY[s.key] = s; });
+  /* WAR isn't a leaderboard category; it comes from the API's sabermetrics stats (api.js → saberLeaders). */
+  X.STAT_BY_KEY['hitting:war'].saber = true;
+  X.STAT_BY_KEY['pitching:war'].saber = true;
 
   /* Rate stats get an asterisk on team pages when the player hasn't qualified yet
      (3.1 plate appearances or 1 inning pitched per team game). */

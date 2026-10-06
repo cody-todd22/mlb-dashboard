@@ -73,6 +73,8 @@
       'pitching:runs': [[1, 'Michael Lorenzen', 'TOR', '113'], [2, 'Seth Lugo', 'KC', '107'], [2, 'Brady Singer', 'CIN', '107'], [4, 'Jeffrey Springs', 'ATH', '105'], [5, 'Kyle Freeland', 'COL', '104']],
       'pitching:walks': [[1, 'Robbie Ray', 'SD', '84'], [2, 'Joey Cantillo', 'CLE', '81'], [3, 'Bubba Chandler', 'PIT', '80'], [4, 'Dylan Cease', 'TOR', '78'], [5, 'Andrew Abbott', 'CIN', '76'], [5, 'Taj Bradley', 'MIN', '76']],
       'pitching:stolenBases': [[1, 'Dylan Cease', 'TOR', '33'], [2, 'Eury Pérez', 'MIA', '31'], [3, 'Matthew Liberatore', 'STL', '24'], [4, 'Andrew Abbott', 'CIN', '23'], [4, 'Sean Burke', 'CWS', '23'], [4, 'George Kirby', 'SEA', '23'], [4, 'Drew Rasmussen', 'TB', '23'], [4, 'Robbie Ray', 'SD', '23']],
+      'hitting:war': [[1, 'Pete Crow-Armstrong', 'CHC', '10.6'], [2, 'Bobby Witt Jr.', 'KC', '7.0'], [3, 'Yordan Alvarez', 'HOU', '6.8'], [4, 'Elly De La Cruz', 'CIN', '6.5'], [5, 'Brice Turang', 'MIL', '5.9'], [5, 'Otto Lopez', 'MIA', '5.9'], [7, 'Alex Bregman', 'CHC', '5.5'], [7, 'Randy Arozarena', 'SEA', '5.5']],
+      'pitching:war': [[1, 'Jacob Misiorowski', 'MIL', '6.7'], [2, 'Cristopher Sánchez', 'PHI', '6.2'], [2, 'Cam Schlittler', 'NYY', '6.2'], [4, 'Chris Sale', 'ATL', '5.8'], [5, 'Jesús Luzardo', 'PHI', '5.5'], [5, 'Dylan Cease', 'TOR', '5.5']],
       'fielding:errors': [[1, 'Otto Lopez', 'MIA', '21'], [1, 'Trea Turner', 'PHI', '21'], [3, 'CJ Abrams', 'WSH', '20'], [3, 'Junior Caminero', 'TB', '20'], [3, 'Kazuma Okamoto', 'TOR', '20']]
     },
     LAD: {

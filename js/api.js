@@ -138,9 +138,32 @@
 
   /* One leaderboard → [{ rank, name, pid, teamId, value }]. One category per request:
    * the endpoint falls back to default categories when a batch mixes stat groups. */
+  /* WAR leaders from /stats?stats=sabermetrics. Sorted here too: with a teamId filter the API
+   * doesn't fully sort by WAR. Ranks and ties follow the one-decimal value people see. */
+  function warText(v) { return (Math.round(v * 10) / 10).toFixed(1); }
+  API.saberLeaders = function (season, group, opts) {
+    var p = { stats: 'sabermetrics', group: group, season: season, sportId: 1, playerPool: 'ALL', sortStat: 'war', order: 'desc',
+      limit: opts.teamId ? 100 : 60, gameType: opts.gameType || 'R' };
+    if (opts.teamId) p.teamId = opts.teamId;
+    return API.get('/stats', p).then(function (j) {
+      var rows = (((j.stats || [])[0] || {}).splits || []).map(function (sp) {
+        var war = num(sp.stat && sp.stat.war);
+        return { name: (sp.player && sp.player.fullName) || '—', pid: sp.player && sp.player.id, teamId: sp.team && sp.team.id, war: war };
+      }).filter(function (r) { return r.war !== null; });
+      rows.sort(function (a, b) { return b.war - a.war; });
+      var lastText = null, lastRank = 0;
+      return rows.slice(0, opts.limit).map(function (r, i) {
+        var text = warText(r.war);
+        if (text !== lastText) { lastRank = i + 1; lastText = text; }
+        return { rank: lastRank, name: r.name, pid: r.pid, teamId: r.teamId, value: text };
+      });
+    });
+  };
+
   API.leaders = function (season, statKey, opts) {
     var s = X.STAT_BY_KEY[statKey];
     if (!s) return Promise.resolve([]);
+    if (s.saber) return API.saberLeaders(season, s.group, opts);
     var p = { leaderCategories: s.cat, statGroup: s.group, season: season, sportId: 1, limit: opts.limit, leaderGameTypes: opts.gameType, playerPool: opts.pool };
     if (opts.teamId) p.teamId = opts.teamId;
     return API.get('/stats/leaders', p).then(function (j) {
