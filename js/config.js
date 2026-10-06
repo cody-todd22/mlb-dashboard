@@ -174,6 +174,52 @@
   X.STAT_BY_KEY = {};
   X.STATS.forEach(function (s) { X.STAT_BY_KEY[s.key] = s; });
 
+  /* Rate stats get an asterisk on team pages when the player hasn't qualified yet
+     (3.1 plate appearances or 1 inning pitched per team game). */
+  ['battingAverage', 'onBasePercentage', 'sluggingPercentage', 'onBasePlusSlugging'].forEach(function (c) { X.STAT_BY_KEY['hitting:' + c].rate = 'bat'; });
+  ['earnedRunAverage', 'walksAndHitsPerInningPitched', 'strikeoutsPer9Inn', 'walksPer9Inn', 'hitsPer9Inn', 'strikeoutWalkRatio', 'battingAverage',
+   'onBasePercentage', 'onBasePlusSlugging', 'winPercentage', 'pitchesPerInning', 'groundoutToFlyoutRatio'].forEach(function (c) { X.STAT_BY_KEY['pitching:' + c].rate = 'pit'; });
+
+  /* Leader race: counting stats → field name in the API's monthly player splits. */
+  X.COUNT_FIELDS = {
+    'hitting:homeRuns': 'homeRuns', 'hitting:runsBattedIn': 'rbi', 'hitting:runs': 'runs', 'hitting:hits': 'hits', 'hitting:doubles': 'doubles',
+    'hitting:triples': 'triples', 'hitting:extraBaseHits': '_xbh', 'hitting:totalBases': 'totalBases', 'hitting:walks': 'baseOnBalls',
+    'hitting:intentionalWalks': 'intentionalWalks', 'hitting:hitByPitches': 'hitByPitch', 'hitting:strikeouts': 'strikeOuts', 'hitting:stolenBases': 'stolenBases',
+    'hitting:caughtStealing': 'caughtStealing', 'hitting:gamesPlayed': 'gamesPlayed', 'hitting:totalPlateAppearances': 'plateAppearances', 'hitting:atBats': 'atBats',
+    'hitting:sacrificeFlies': 'sacFlies', 'hitting:sacrificeBunts': 'sacBunts', 'hitting:groundIntoDoublePlays': 'groundIntoDoublePlay',
+    'pitching:strikeouts': 'strikeOuts', 'pitching:wins': 'wins', 'pitching:losses': 'losses', 'pitching:saves': 'saves', 'pitching:saveOpportunities': 'saveOpportunities',
+    'pitching:holds': 'holds', 'pitching:blownSaves': 'blownSaves', 'pitching:inningsPitched': 'inningsPitched', 'pitching:gamesPlayed': 'gamesPlayed',
+    'pitching:gamesStarted': 'gamesStarted', 'pitching:gamesFinished': 'gamesFinished', 'pitching:completeGames': 'completeGames', 'pitching:shutouts': 'shutouts',
+    'pitching:hits': 'hits', 'pitching:runs': 'runs', 'pitching:earnedRun': 'earnedRuns', 'pitching:homeRuns': 'homeRuns', 'pitching:walks': 'baseOnBalls',
+    'pitching:intentionalWalks': 'intentionalWalks', 'pitching:hitBatsman': 'hitBatsmen', 'pitching:wildPitch': 'wildPitches', 'pitching:balk': 'balks',
+    'pitching:totalBattersFaced': 'battersFaced', 'pitching:numberOfPitches': 'numberOfPitches'
+  };
+  /* Title race: rate stats rebuilt from season-to-date components at each month's end. */
+  X.RATE_FROM_PARTS = {
+    'hitting:battingAverage': function (c) { return c.atBats ? c.hits / c.atBats : null; },
+    'hitting:onBasePercentage': function (c) { var d = c.atBats + c.baseOnBalls + c.hitByPitch + c.sacFlies; return d ? (c.hits + c.baseOnBalls + c.hitByPitch) / d : null; },
+    'hitting:sluggingPercentage': function (c) { return c.atBats ? c.totalBases / c.atBats : null; },
+    'hitting:onBasePlusSlugging': function (c) { var d = c.atBats + c.baseOnBalls + c.hitByPitch + c.sacFlies; return d && c.atBats ? (c.hits + c.baseOnBalls + c.hitByPitch) / d + c.totalBases / c.atBats : null; },
+    'pitching:earnedRunAverage': function (c) { return c.inningsPitched ? 9 * c.earnedRuns / c.inningsPitched : null; },
+    'pitching:walksAndHitsPerInningPitched': function (c) { return c.inningsPitched ? (c.baseOnBalls + c.hits) / c.inningsPitched : null; },
+    'pitching:strikeoutsPer9Inn': function (c) { return c.inningsPitched ? 9 * c.strikeOuts / c.inningsPitched : null; },
+    'pitching:walksPer9Inn': function (c) { return c.inningsPitched ? 9 * c.baseOnBalls / c.inningsPitched : null; },
+    'pitching:hitsPer9Inn': function (c) { return c.inningsPitched ? 9 * c.hits / c.inningsPitched : null; },
+    'pitching:strikeoutWalkRatio': function (c) { return c.baseOnBalls ? c.strikeOuts / c.baseOnBalls : null; }
+  };
+
+  /* Feature chart (block R) options, grouped as they appear in the settings picker. */
+  X.FEATURE_GROUPS = [
+    { label: 'Race to October', options: [
+      ['gap', 'Games above .500'], ['pct', 'Winning percentage'], ['gb', 'Games back in the division'],
+      ['wc', 'Wild-card race'], ['rank', 'Division standing over time'], ['monthly', 'Month-by-month record']] },
+    { label: 'Stat races (players)', options: [['lrace', 'Leader race (pick a counting stat)'], ['trace', 'Title race (pick a rate stat)']] },
+    { label: 'Team trends', options: [['rpg', 'Runs scored vs. allowed per game'], ['tops', 'Team OPS by month'], ['tera', 'Team ERA by month'], ['hrrace', 'Home run race between clubs']] },
+    { label: 'Form and game-by-game', options: [['season', 'Season in one picture'], ['form10', 'Rolling 10-game form'], ['homeaway', 'Home vs. road by month'], ['onerun', 'One-run games']] },
+    { label: 'Team players (team pages only)', options: [['hops', "Top hitters' OPS by month"], ['rera', 'Rotation ERA by month']] }
+  ];
+  X.TEAM_ONLY_CHARTS = { hops: true, rera: true };
+
   /*
    * Club-level metrics, used by the header tiles and the all-clubs chart.
    * src: st = standings, hit / pit / fld = team season stats. low = lower is better.
@@ -183,8 +229,8 @@
   X.TEAM_METRICS = [
     M('st:record', 'st', 'pct', 'Record', 'W–L', 'record'),
     M('st:pct', 'st', 'pct', 'Winning percentage', 'PCT', 'rate3'),
-    M('st:wins', 'st', 'wins', 'Wins', 'W', 'int'),
-    M('st:losses', 'st', 'losses', 'Losses', 'L', 'int', true),
+    M('st:wins', 'st', 'w', 'Wins', 'W', 'int'),
+    M('st:losses', 'st', 'l', 'Losses', 'L', 'int', true),
     M('st:rd', 'st', 'rd', 'Run differential', 'RD', 'signed'),
     M('st:rs', 'st', 'rs', 'Runs scored', 'RS', 'int'),
     M('st:ra', 'st', 'ra', 'Runs allowed', 'RA', 'int', true),
@@ -259,13 +305,13 @@
   };
 
   X.DEFAULT_SETTINGS = {
-    v: 1,
+    v: 2,
     theme: 'auto',            // auto | light | dark
     layout: 'standard',       // standard | tv
     defaultTeam: 'MLB',
     gameType: 'R',            // R regular season | P postseason
     pool: 'QUALIFIED',        // QUALIFIED | ALL | ROOKIES
-    teamPool: 'QUALIFIED',
+    teamPool: 'ALL',
     limit: 5,
     ticker: true,
     tickerSpeed: 'normal',    // slow | normal | fast
@@ -274,7 +320,9 @@
     sampleLive: false,        // snapshot preview only
     blocks: {
       tile1: 'st:record', tile2: 'st:rd', tile3: 'hit:ops', tile4: 'pit:era',
-      race: 'gap',            // gap | pct | hide
+      race: 'gap',            // feature chart: see FEATURE_GROUPS, or hide
+      raceStat: 'hitting:homeRuns',          // leader race stat
+      titleStat: 'hitting:battingAverage',   // title race stat
       standings: 'show',
       feat1: 'hitting:runsBattedIn', feat2: 'hitting:onBasePlusSlugging',
       board1: 'hitting:homeRuns', board2: 'hitting:battingAverage', board3: 'hitting:stolenBases',

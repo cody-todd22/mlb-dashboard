@@ -131,6 +131,11 @@
     g.state = 'final'; g.detailed = 'Final'; g.away.score = as; g.home.score = hs;
     return g;
   }
+  /* A next-round game whose teams aren't decided yet (the API uses placeholder clubs). */
+  function P(pk, date, day, round, aId, aName, hId, hName, num) {
+    return { pk: pk, date: date, day: day, tbd: true, state: 'pre', detailed: 'Scheduled', away: { id: aId, name: aName, score: null }, home: { id: hId, name: hName, score: null },
+      inning: '', outs: null, gameType: 'L', post: true, round: round, gameNum: num, gamesInSeries: 7, ifNec: false, seriesStatus: null, tv: '', probAway: null, probHome: null };
+  }
   var NLDS = 'NL Division Series', ALDS = 'AL Division Series';
   var GAMES = [
     F(1, '2026-10-03T20:00:00Z', '2026-10-03', 'CWS', 3, 'CLE', 0, ALDS, 1),
@@ -150,13 +155,16 @@
     G(15, '2026-10-09T20:30:00Z', '2026-10-09', 'SD', 'MIL', NLDS, 5, true, 'FS1'),
     G(16, '2026-10-10T00:00:00Z', '2026-10-09', 'ATL', 'LAD', NLDS, 5, true, 'FOX'),
     G(17, '2026-10-10T17:00:00Z', '2026-10-10', 'CWS', 'CLE', ALDS, 5, true, 'TBS', null, null, true),
-    G(18, '2026-10-10T17:00:00Z', '2026-10-10', 'NYY', 'TB', ALDS, 5, true, 'TBS', null, null, true)
+    G(18, '2026-10-10T17:00:00Z', '2026-10-10', 'NYY', 'TB', ALDS, 5, true, 'TBS', null, null, true),
+    P(19, '2026-10-11T07:33:00Z', '2026-10-11', 'NL Championship Series', 5525, 'NL Lower Seed', 5517, 'NL Higher Seed', 1),
+    P(20, '2026-10-12T07:33:00Z', '2026-10-12', 'AL Championship Series', 5521, 'AL Lower Seed', 5513, 'AL Higher Seed', 1),
+    P(21, '2026-10-12T07:33:00Z', '2026-10-12', 'NL Championship Series', 5525, 'NL Lower Seed', 5517, 'NL Higher Seed', 2)
   ];
   var SERIES = [
-    { round: ALDS, a: ID.CWS, aw: 2, b: ID.CLE, bw: 0, need: 3, over: false, note: '' },
-    { round: ALDS, a: ID.TB, aw: 2, b: ID.NYY, bw: 0, need: 3, over: false, note: '' },
-    { round: NLDS, a: ID.LAD, aw: 1, b: ID.ATL, bw: 1, need: 3, over: false, note: '' },
-    { round: NLDS, a: ID.MIL, aw: 2, b: ID.SD, bw: 0, need: 3, over: false, note: '' }
+    { type: 'D', round: ALDS, a: ID.CWS, aw: 2, b: ID.CLE, bw: 0, need: 3, over: false },
+    { type: 'D', round: ALDS, a: ID.TB, aw: 2, b: ID.NYY, bw: 0, need: 3, over: false },
+    { type: 'D', round: NLDS, a: ID.LAD, aw: 1, b: ID.ATL, bw: 1, need: 3, over: false },
+    { type: 'D', round: NLDS, a: ID.MIL, aw: 2, b: ID.SD, bw: 0, need: 3, over: false }
   ];
   /* Illustrative in-progress scores for previewing the live ticker state (settings → sample live games). */
   var SAMPLE_LIVE = { 7: { as: 1, hs: 2, inning: 'Middle 6th', outs: null }, 8: { as: 1, hs: 2, inning: 'Top 6th', outs: 1 } };
@@ -192,7 +200,9 @@
     return {
       asOf: '2026-10-06T16:47:00Z', now: '2026-10-06T16:47:00Z', season: 2026, phase: 'post',
       standings: standings, teamStats: { hit: hit, pit: pit, fld: {} },
-      race: { labels: ['Opening', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Final'], pts: pts },
+      race: { labels: ['Opening', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Final'], snaps: [0, 1, 2, 3, 4, 5, 6].map(function (i) {
+        var m = {}; Object.keys(pts).forEach(function (id) { m[id] = pts[id][i]; }); return m;
+      }) },
       games: GAMES, series: SERIES, leaders: leaders, sampleLive: SAMPLE_LIVE
     };
   }

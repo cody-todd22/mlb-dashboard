@@ -123,6 +123,14 @@ button, select, input { font: inherit; color: inherit; }
 .gl.zero { stroke: var(--ink); stroke-dasharray: none; stroke-width: 1.5; }
 .ln { fill: none; stroke: var(--mark); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
 .ln.hi { stroke: var(--team-ink); stroke-width: 4; }
+.ln.dash { stroke-dasharray: 9 6; }
+.ln.ref { stroke: var(--mark); stroke-width: 2; stroke-dasharray: 3 5; }
+.pt.dash { stroke-dasharray: none; }
+.gbw { fill: var(--team-ink); }
+.gbl { fill: var(--mark-2); }
+.dual { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.dual > div { flex: 1 1 300px; min-width: 0; }
+.dual-h { margin: 0 0 4px; font-family: var(--font-display); font-weight: 700; font-size: 15px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
 .pt { fill: var(--surface); stroke: var(--team-ink); stroke-width: 3; }
 .end { fill: var(--muted); font-size: 16px; font-weight: 600; }
 .end.hi { fill: var(--team-ink); font-weight: 800; }
@@ -130,6 +138,9 @@ button, select, input { font: inherit; color: inherit; }
 .legend span { display: inline-flex; align-items: center; gap: 8px; }
 .sw { display: inline-block; width: 26px; height: 4px; background: var(--team-ink); }
 .sw.gray { height: 2px; background: var(--mark); }
+.sw.dash { background: repeating-linear-gradient(90deg, var(--team-ink) 0 9px, transparent 9px 15px); }
+.sw.ref { height: 2px; background: repeating-linear-gradient(90deg, var(--mark) 0 3px, transparent 3px 8px); }
+.sw.sq.gray { height: 14px; background: var(--mark-2); box-shadow: none; }
 .sw.sq { width: 14px; height: 14px; box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.7); }
 
 /* Standings */
@@ -144,17 +155,20 @@ button, select, input { font: inherit; color: inherit; }
 /* Featured leader boards */
 .feat { display: flex; flex-wrap: wrap; gap: 18px; }
 .feat > .card { flex: 1 1 420px; }
-.lb { display: flex; flex-direction: column; gap: 4px; padding: 10px; }
+.lb { --slant: 14px; display: flex; flex-direction: column; gap: 4px; padding: 10px; }
 .lrow { display: flex; align-items: stretch; height: 46px; background: var(--surface-2); }
 .lrow.top { height: 58px; }
 .lrank { width: 56px; flex: none; display: flex; align-items: center; justify-content: center; padding-right: 6px; background: var(--team); color: #FFFFFF; font-family: var(--font-display); font-weight: 800; font-style: italic; font-size: 21px; clip-path: polygon(0 0, 100% 0, 84% 100%, 0 100%); }
 .lname { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; gap: 10px; padding: 0 12px; }
-.lbar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--team-ink); opacity: 0.14; }
+/* the bar's right edge leans like the value block's left edge, so the leader's bar meets it flush */
+.lbar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--team-ink); opacity: 0.14; clip-path: polygon(0 0, 100% 0, calc(100% - var(--slant)) 100%, 0 100%); }
 .lrow.top .lbar { opacity: 0.24; }
 .lname b { position: relative; font-family: var(--font-display); font-weight: 700; font-size: 18px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lrow.top .lname b { font-size: 21px; }
 .lname em { position: relative; font-style: normal; font-family: var(--font-display); font-weight: 600; font-size: 14px; color: var(--ink-2); }
-.lval { width: 100px; flex: none; display: flex; align-items: center; justify-content: center; padding-left: 10px; background: var(--surface); color: var(--ink); font-family: var(--font-display); font-weight: 800; font-size: 21px; font-variant-numeric: tabular-nums; clip-path: polygon(14% 0, 100% 0, 100% 100%, 0 100%); }
+.lval { position: relative; z-index: 1; width: 100px; flex: none; display: flex; align-items: center; justify-content: center; padding-left: 10px; background: var(--surface); color: var(--ink); font-family: var(--font-display); font-weight: 800; font-size: 21px; font-variant-numeric: tabular-nums; clip-path: polygon(var(--slant) 0, 100% 0, 100% 100%, 0 100%); }
+.lb-note { padding: 0 14px 12px; font-size: 12px; color: var(--muted); }
+.bd-list + .lb-note { padding: 0 12px 10px; }
 .lrow.top .lval { background: var(--team-2); color: var(--on-team-2); font-size: 28px; }
 
 /* Compact boards */
@@ -244,6 +258,7 @@ button, select, input { font: inherit; color: inherit; }
 .map .span6 { grid-column: span 6; } .map .span4 { grid-column: span 4; } .map .span3 { grid-column: span 3; } .map .span2 { grid-column: span 2; } .map .span1 { grid-column: span 1; }
 .pickers { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 24px; }
 .pkr { display: flex; flex-direction: column; gap: 6px; }
+.pkr .sublabel { font-family: var(--font-display); font-weight: 600; font-size: 14px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); margin-top: 4px; }
 .pkr label { display: flex; align-items: center; gap: 8px; font-family: var(--font-display); font-weight: 700; font-size: 16px; text-transform: uppercase; }
 .code { display: inline-flex; align-items: center; justify-content: center; min-width: 30px; height: 22px; padding: 0 6px; background: var(--ink); color: var(--surface); font-family: var(--font-display); font-weight: 800; font-size: 13px; }
 .set-actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
@@ -292,7 +307,11 @@ html.tv body { height: 100%; overflow: hidden; }
 .tv .lrank { width: 3.6rem; font-size: 1.6rem; }
 .tv .lname b, .tv .lrow.top .lname b { font-size: 1.6rem; }
 .tv .lname em { font-size: 1.05rem; }
+.tv .lb { --slant: 0.9rem; }
 .tv .lval, .tv .lrow.top .lval { width: 6.4rem; font-size: 2rem; }
+.tv .dual { flex-direction: column; flex-wrap: nowrap; height: 100%; }
+.tv .dual > div { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.tv .dual .chart-svg { flex: 1; min-height: 0; }
 .tv-stack { min-height: 0; display: flex; flex-direction: column; gap: 1.1rem; }
 .tv-stack > .tv-panel { flex: 1; min-height: 0; overflow: hidden; }
 .tv-stack > .tv-panel:first-child { flex: none; }

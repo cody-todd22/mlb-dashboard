@@ -1,4 +1,4 @@
-/* MLB Live Board — app: state, data loading, rendering, ticker, settings, TV mode. */
+/* MLB Live Board — app: state, data loading, rendering, ticker, feature chart, settings, TV mode. */
 (function () {
   'use strict';
   var X = window.MLBX, API = X.API, CH = X.Charts;
@@ -6,8 +6,8 @@
   var LS_KEY = 'mlb-live-board:settings';
 
   var S = {
-    settings: null, team: 'MLB', view: 'dash', data: null, leaders: {}, pending: {},
-    tickPaused: false, tv: { chart: 0, board: 0, timer: null }, timers: {}, wake: null, loadError: null, resetArmed: false
+    settings: null, team: 'MLB', view: 'dash', data: null, leaders: {}, pending: {}, ext: {}, pendingExt: {},
+    tickPaused: false, tv: { chart: 0, board: 0, timer: null }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false
   };
   var TK = { x: 0, last: null, raf: null, hover: false };
 
@@ -17,24 +17,30 @@
   function team(id) { return id === 'MLB' ? X.LEAGUE : X.TEAM_BY_ID[id]; }
   function abbr(id) { var t = X.TEAM_BY_ID[id]; return t ? t.abbr : '—'; }
   function nick(id) { var t = X.TEAM_BY_ID[id]; return t ? t.name : '—'; }
+  function lastName(n) { var p = String(n).split(' '); if (p.length > 2 && /^(Jr\.?|Sr\.?|II|III|IV)$/.test(p[p.length - 1])) return p.slice(-2).join(' '); return p.length > 1 ? p.slice(1).join(' ') : n; }
   function shortName(n) { var p = String(n).split(' '); return p.length > 1 ? p[0].charAt(0) + '. ' + p.slice(1).join(' ') : n; }
   function shortRound(r) {
     if (!r) return '';
-    var m = { 'Division Series': 'DS', 'Championship Series': 'CS', 'Wild Card Series': 'WC' };
     if (/World Series/i.test(r)) return 'World Series';
-    var lg = /^(AL|NL|American|National)/.exec(r);
-    var L = lg ? (lg[1] === 'American' ? 'AL' : lg[1] === 'National' ? 'NL' : lg[1]) : '';
-    for (var k in m) if (r.indexOf(k) >= 0) return k === 'Wild Card Series' ? L + ' Wild Card' : L + m[k];
+    var L = leagueOf(r) || '';
+    if (r.indexOf('Division Series') >= 0) return L + 'DS';
+    if (r.indexOf('Championship Series') >= 0) return L + 'CS';
+    if (r.indexOf('Wild Card') >= 0) return L + ' Wild Card';
     return r;
   }
+  function leagueOf(r) { if (/^(AL|American)/.test(r || '')) return 'AL'; if (/^(NL|National)/.test(r || '')) return 'NL'; return null; }
+  function teamLeague(id) { var t = X.TEAM_BY_ID[id]; return t ? X.DIV_BY_ID[t.div].league : null; }
   function nowDate() { return S.data && S.data.source === 'snapshot' ? new Date(S.data.now) : new Date(); }
   function dayKey(d) { return API.ymd(d); }
+  function todayKey() { return dayKey(nowDate()); }
+  function yestKey() { return dayKey(new Date(nowDate().getTime() - 86400000)); }
+  function byDate(a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); }
   function whenLabel(g) {
     var d = new Date(g.date), n = nowDate();
-    var dk = dayKey(d), today = dayKey(n);
-    var tm = new Date(n.getTime() + 86400000);
-    if (dk === today) return 'Today';
-    if (dk === dayKey(tm)) return 'Tomorrow';
+    var dk = dayKey(d);
+    if (dk === dayKey(n)) return 'Today';
+    if (dk === dayKey(new Date(n.getTime() + 86400000))) return 'Tomorrow';
+    if (dk === dayKey(new Date(n.getTime() - 86400000))) return 'Yesterday';
     return d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
   }
   function timeLabel(g) {
@@ -43,13 +49,28 @@
   }
   function isMLB() { return S.team === 'MLB'; }
   function involves(g, id) { return g.away.id === id || g.home.id === id; }
+  function isLive() { return S.data && S.data.source === 'live'; }
+  function halfText(v) { return v % 1 ? Math.abs(v).toFixed(1) : String(Math.abs(v)); }
+  function signedHalf(v) { return v > 0 ? '+' + halfText(v) : (v < 0 ? '−' + halfText(v) : '0'); }
+  function ipText(v) { var w = Math.floor(v + 1e-9), f = Math.round((v - w) * 3); return w + '.' + f; }
+
+  /* Message blocks. Snapshot gaps and empty live responses read differently on purpose,
+     so a live gap (likely a bug or an API change) stands out. */
+  function msgLoading(what) { return '<div class="loading">Loading ' + esc(what) + '</div>'; }
+  function msgSnapshot() { return '<div class="empty"><strong>Available with live data</strong>The saved snapshot doesn’t include this. It loads from the MLB Stats API on your hosted board.</div>'; }
+  function msgNoData(what) { return '<div class="empty"><strong>No data came back</strong>The MLB Stats API returned nothing for ' + esc(what) + '. If this keeps happening, check the request in js/api.js.</div>'; }
+  function missingShort() { return isLive() ? 'No data from the MLB Stats API' : 'Available with live data'; }
 
   /* ───────── settings ───────── */
   function mergeSettings(saved) {
     var s = clone(X.DEFAULT_SETTINGS);
     if (!saved || typeof saved !== 'object') return s;
-    Object.keys(s).forEach(function (k) { if (k !== 'blocks' && saved[k] !== undefined) s[k] = saved[k]; });
+    Object.keys(s).forEach(function (k) { if (k !== 'blocks' && k !== 'v' && saved[k] !== undefined) s[k] = saved[k]; });
     if (saved.blocks) Object.keys(s.blocks).forEach(function (k) { if (saved.blocks[k] !== undefined) s.blocks[k] = saved.blocks[k]; });
+    if (!saved.v || saved.v < 2) s.teamPool = 'ALL';   // v2: team pages default to all players
+    var validChart = { hide: true };
+    X.FEATURE_GROUPS.forEach(function (g) { g.options.forEach(function (o) { validChart[o[0]] = true; }); });
+    if (!validChart[s.blocks.race]) s.blocks.race = 'gap';
     return s;
   }
   function loadSettings() {
@@ -81,7 +102,8 @@
     var sn = X.SNAPSHOT;
     S.loadError = err ? String(err.message || err) : null;
     S.data = { source: 'snapshot', asOf: sn.asOf, now: sn.now, season: sn.season, phase: sn.phase, info: null,
-      standings: sn.standings, teamStats: sn.teamStats, race: sn.race, games: sn.games, series: sn.series, snapLeaders: sn.leaders };
+      standings: sn.standings, teamStats: sn.teamStats, games: sn.games, series: sn.series, snapLeaders: sn.leaders,
+      race: { labels: sn.race.labels, snaps: sn.race.snaps, months: ['Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep'] } };
   }
   function phaseFor(info, d) {
     var t = dayKey(d);
@@ -91,6 +113,8 @@
     if (info.postStart && t >= info.postStart && (!info.postEnd || t <= info.postEnd)) return 'post';
     return 'off';
   }
+  function windowStart() { return dayKey(new Date(Date.now() - 3 * 86400000)); }
+  function windowEnd() { return dayKey(new Date(Date.now() + 6 * 86400000)); }
   function loadLive() {
     var today = new Date(), year = today.getFullYear();
     return API.season(year).then(function (info) {
@@ -98,46 +122,66 @@
       return info;
     }).then(function (info) {
       if (!info) throw new Error('No season calendar returned');
-      var start = dayKey(new Date(today.getTime() - 3 * 86400000)), end = dayKey(new Date(today.getTime() + 6 * 86400000));
       return Promise.all([
         API.standings(info.year),
         API.teamStats(info.year, S.settings.gameType),
-        API.schedule(start, end).catch(function () { return []; })
+        API.schedule(windowStart(), windowEnd()).catch(function () { return []; })
       ]).then(function (r) {
+        var end = dayKey(today) < info.end ? dayKey(today) : info.end;
         S.data = { source: 'live', asOf: new Date().toISOString(), now: null, season: info.year, info: info, phase: phaseFor(info, today),
-          standings: r[0], teamStats: r[1], games: r[2], series: API.seriesFromGames(r[2]), race: null };
+          standings: r[0], teamStats: r[1], games: r[2], series: API.seriesFromGames(r[2]), race: null,
+          windows: API.monthWindows(info.start, end), seasonEnd: end, seasonOver: dayKey(today) > info.end };
+        S.leaders = {}; S.ext = {}; S.pendingExt = {};
         loadRace();
       });
     });
   }
   function loadRace() {
     var d = S.data;
-    if (!d || d.source !== 'live' || !d.info) return;
-    var end = dayKey(new Date()) < d.info.end ? dayKey(new Date()) : d.info.end;
-    API.race(d.season, d.info.start, end).then(function (race) { d.race = race; refreshMain(); }).catch(function () { d.race = { failed: true }; refreshMain(); });
+    if (!isLive() || !d.info) return;
+    API.race(d.season, d.info.start, d.seasonEnd, d.seasonOver).then(function (race) {
+      race.months = race.windows.map(function (w) { return w.label; });
+      d.race = race; refreshMain();
+    }).catch(function () { d.race = { failed: true }; refreshMain(); });
   }
   function refreshSchedule() {
-    var d = S.data; if (!d || d.source !== 'live') return Promise.resolve();
-    var today = new Date();
-    var start = dayKey(new Date(today.getTime() - 3 * 86400000)), end = dayKey(new Date(today.getTime() + 6 * 86400000));
-    return API.schedule(start, end).then(function (games) {
+    if (!isLive()) return Promise.resolve();
+    var d = S.data;
+    return API.schedule(windowStart(), windowEnd()).then(function (games) {
       d.games = games; d.series = API.seriesFromGames(games); d.asOf = new Date().toISOString();
+      Object.keys(S.ext).forEach(function (k) { if (k.indexOf('recent|') === 0) delete S.ext[k]; });
       refreshTicker(); refreshMain(); refreshStatus();
     }).catch(function () { /* keep the last good schedule */ });
   }
-  function refreshStats() {
-    var d = S.data; if (!d || d.source !== 'live') return;
-    Promise.all([API.standings(d.season), API.teamStats(d.season, S.settings.gameType)]).then(function (r) {
-      d.standings = r[0]; d.teamStats = r[1]; d.asOf = new Date().toISOString();
-      S.leaders = {}; refreshAll();
-    }).catch(function () { /* retry next cycle */ });
+  /* Scores: every minute while a game is live; otherwise sleep until about a minute before
+     the next scheduled first pitch (or keep checking a game that should have started). */
+  function scheduleScores() {
+    clearTimeout(S.timers.sched);
+    if (!S.settings.refresh || !isLive()) return;
+    var now = Date.now(), gs = S.data.games, delay = null;
+    if (gs.some(function (g) { return g.state === 'live'; })) delay = 60000;
+    else {
+      var starts = gs.filter(function (g) { return g.state === 'pre' && !g.tbd && !/Postponed|Cancelled/.test(g.detailed); }).map(function (g) { return new Date(g.date).getTime(); });
+      if (starts.some(function (t) { return t <= now && now - t < 3 * 3600000; })) delay = 60000;
+      else {
+        var future = starts.filter(function (t) { return t > now; });
+        if (future.length) delay = Math.max(30000, Math.min.apply(null, future) - now - 60000);
+      }
+    }
+    if (delay == null) return;   // nothing scheduled this week: the 5 AM refresh picks up new games
+    S.timers.sched = setTimeout(function () { refreshSchedule().then(scheduleScores); }, Math.min(delay, 2147483000));
   }
-  function scheduleRefresh() {
-    clearTimeout(S.timers.sched); clearInterval(S.timers.stats);
-    if (!S.settings.refresh || !S.data || S.data.source !== 'live') return;
-    var anyLive = S.data.games.some(function (g) { return g.state === 'live'; });
-    S.timers.sched = setTimeout(function () { refreshSchedule().then(scheduleRefresh); }, anyLive ? 30000 : 300000);
-    S.timers.stats = setInterval(refreshStats, 15 * 60000);
+  /* Stats, standings, leaders and charts reload once a day at 5 AM local time. */
+  function scheduleDaily() {
+    clearTimeout(S.timers.daily);
+    if (!S.settings.refresh || !isLive()) return;
+    var n = new Date(), t = new Date(n.getFullYear(), n.getMonth(), n.getDate(), 5, 0, 0);
+    if (t <= n) t = new Date(t.getTime() + 86400000);
+    S.nextDailyAt = t.getTime();
+    S.timers.daily = setTimeout(dailyReload, Math.min(t - n, 2147483000));
+  }
+  function dailyReload() {
+    loadLive().then(function () { render(); }).catch(function () { /* keep yesterday's data */ }).then(function () { scheduleScores(); scheduleDaily(); });
   }
 
   /* Games with the snapshot's optional sample live state applied. */
@@ -152,22 +196,34 @@
     });
   }
 
-  /* ───────── leaders ───────── */
-  function leaderKey(scope, statKey) {
-    var s = S.settings;
-    return [scope, statKey, scope === 'MLB' ? s.pool : s.teamPool, s.gameType, s.limit].join('|');
+  /* Lazily loaded extras (charts, rosters, a team's recent games). Returns the value,
+     undefined while loading, or { error } — and starts the request the first time. */
+  function need(key, fn) {
+    var v = S.ext[key];
+    if (v !== undefined) return v;
+    if (!isLive()) return { error: 'snapshot' };
+    if (!S.pendingExt[key]) {
+      S.pendingExt[key] = true;
+      fn().then(function (r) { S.ext[key] = r; }, function (e) { S.ext[key] = { error: String((e && e.message) || e) }; })
+        .then(function () { delete S.pendingExt[key]; queueRefresh(); });
+    }
+    return undefined;
   }
+  function isErr(v) { return v && !Array.isArray(v) && v.error; }
+
+  /* ───────── leaders ───────── */
+  function poolFor() { return isMLB() ? S.settings.pool : S.settings.teamPool; }
+  function leaderKey(scope, statKey) { return [scope, statKey, poolFor(), S.settings.gameType, S.settings.limit].join('|'); }
   function leaderState(statKey) {
-    var scope = S.team, d = S.data;
+    var d = S.data;
     if (!d) return { loading: true };
     if (d.source === 'snapshot') {
-      var sc = d.snapLeaders[scope === 'MLB' ? 'MLB' : String(scope)];
+      var sc = d.snapLeaders[isMLB() ? 'MLB' : String(S.team)];
       var rows = sc && sc[statKey];
       if (!rows) return { missing: true };
       return { rows: rows.slice(0, S.settings.limit) };
     }
-    var k = leaderKey(scope, statKey);
-    return S.leaders[k] || { loading: true };
+    return S.leaders[leaderKey(S.team, statKey)] || { loading: true };
   }
   function activeLeaderStats() {
     var b = S.settings.blocks, out = [];
@@ -175,20 +231,38 @@
     return out;
   }
   function ensureLeaders() {
-    var d = S.data; if (!d || d.source !== 'live') return;
-    var scope = S.team;
+    if (!isLive()) return;
+    var scope = S.team, d = S.data;
     activeLeaderStats().forEach(function (statKey) {
       var k = leaderKey(scope, statKey);
       if (S.leaders[k] || S.pending[k]) return;
       S.pending[k] = true;
-      API.leaders(d.season, statKey, { teamId: scope === 'MLB' ? null : scope, limit: S.settings.limit, pool: scope === 'MLB' ? S.settings.pool : S.settings.teamPool, gameType: S.settings.gameType })
+      API.leaders(d.season, statKey, { teamId: scope === 'MLB' ? null : scope, limit: S.settings.limit, pool: poolFor(), gameType: S.settings.gameType })
         .then(function (rows) { S.leaders[k] = { rows: rows.slice(0, S.settings.limit) }; })
         .catch(function () { S.leaders[k] = { error: true }; })
-        .then(function () { delete S.pending[k]; queueMainRefresh(); });
+        .then(function () { delete S.pending[k]; queueRefresh(); });
     });
   }
-  var mainQueued = false;
-  function queueMainRefresh() { if (mainQueued) return; mainQueued = true; setTimeout(function () { mainQueued = false; refreshMain(); }, 60); }
+  var queued = false;
+  function queueRefresh() { if (queued) return; queued = true; setTimeout(function () { queued = false; refreshMain(); refreshTicker(); ensureLeaders(); }, 60); }
+
+  /* Rosters → qualification for the asterisk (3.1 PA or 1 IP per team game). */
+  function roster(teamId) {
+    var d = S.data;
+    return need('roster|' + teamId, function () {
+      return Promise.all([API.roster(d.season, teamId, 'hitting', 'R'), API.roster(d.season, teamId, 'pitching', 'R')]).then(function (r) { return { hit: r[0], pit: r[1] }; });
+    });
+  }
+  function qualifier() {
+    if (isMLB() || !isLive() || S.settings.gameType !== 'R') return null;
+    var r = roster(S.team);
+    if (!r || isErr(r)) return null;
+    var st = S.data.standings[S.team], G = st ? st.w + st.l : 0;
+    var bat = {}, pit = {};
+    r.hit.forEach(function (p) { bat[p.pid] = (p.stat.plateAppearances || 0) >= 3.1 * G; });
+    r.pit.forEach(function (p) { pit[p.pid] = (p.stat.inningsPitched || 0) >= 1.0 * G; });
+    return function (kind, pid) { var m = kind === 'bat' ? bat : pit; return pid in m ? m[pid] : true; };
+  }
 
   /* ───────── club metrics ───────── */
   function metricValue(id, key) {
@@ -220,13 +294,17 @@
     var ties = vals.filter(function (x) { return x.v === me.v; }).length;
     return { rank: better + 1, tie: ties > 1, of: vals.length, best: vals[0] };
   }
+  function bestBy(key, n, low) {
+    return X.TEAMS.map(function (t) { return { id: t.id, v: metricValue(t.id, key) }; }).filter(function (x) { return x.v != null; })
+      .sort(function (a, b) { return low ? a.v - b.v : b.v - a.v; }).slice(0, n).map(function (x) { return x.id; });
+  }
 
   /* ───────── header ───────── */
   function contextLine() {
     var d = S.data; if (!d) return 'Loading';
     var season = d.season, g = games();
     if (d.phase === 'post') {
-      var cur = g.filter(function (x) { return x.post && x.state !== 'final'; }).sort(function (a, b) { return a.date < b.date ? -1 : 1; })[0];
+      var cur = g.filter(function (x) { return x.post && x.state !== 'final'; }).sort(byDate)[0];
       var round = cur ? cur.round.replace(/^(AL|NL)\s+/, '').replace(/^(American|National) League\s+/, '') : '';
       return season + ' Postseason' + (round ? ' · ' + round : '');
     }
@@ -259,9 +337,9 @@
     if (isMLB()) {
       var withVal = X.TEAMS.filter(function (t) { return metricValue(t.id, key) != null; });
       var rk = withVal.length ? metricRank(withVal[0].id, key) : null;
-      if (!rk || !rk.best) return '<div class="tile"><span class="tile-k">' + esc(m.label) + '</span><span class="tile-v">—</span><span class="tile-s">Not in this data</span></div>';
+      if (!rk || !rk.best) return '<div class="tile"><span class="tile-k">' + esc(m.label) + '</span><span class="tile-v">—</span><span class="tile-s">' + esc(missingShort()) + '</span></div>';
       var best = rk.best.id;
-      return '<div class="tile"><span class="tile-k">' + esc(m.fmt === 'record' ? 'Best record' : m.label) + '</span><span class="tile-v">' + esc(abbr(best) + ' · ' + metricText(best, key)) + '</span><span class="tile-s">' + esc(nick(best)) + ' lead MLB</span></div>';
+      return '<div class="tile"><span class="tile-k">' + esc(m.fmt === 'record' ? 'Best record' : m.label) + '</span><span class="tile-v">' + esc(abbr(best) + ' · ' + metricText(best, key)) + '</span></div>';
     }
     var id = S.team, txt = metricText(id, key), sub = '';
     if (m.fmt === 'record') {
@@ -269,21 +347,21 @@
       sub = r.divRank ? ord(r.divRank) + ' in the ' + X.DIV_BY_ID[team(id).div].name + (r.gb && r.gb !== '-' ? ' · ' + r.gb + ' GB' : '') : '';
     } else {
       var rr = metricRank(id, key);
-      sub = rr ? (rr.tie ? 'T-' : '') + ord(rr.rank) + ' of ' + rr.of + ' in MLB' : 'Not in this data';
+      sub = rr ? (rr.tie ? 'T-' : '') + ord(rr.rank) + ' of ' + rr.of + ' in MLB' : missingShort();
     }
     return '<div class="tile"><span class="tile-k">' + esc(m.label) + '</span><span class="tile-v">' + esc(txt) + '</span><span class="tile-s">' + esc(sub) + '</span></div>';
   }
   function tilesHTML() {
     return ['tile1', 'tile2', 'tile3', 'tile4'].map(function (k) { var v = S.settings.blocks[k]; return v && v !== 'hide' ? tileHTML(v) : ''; }).join('');
   }
+  var PAUSE_SVG = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"><line x1="8" y1="5" x2="8" y2="19"></line><line x1="16" y1="5" x2="16" y2="19"></line></svg>';
+  var PLAY_SVG = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="#FFFFFF"><polygon points="7 5 19 12 7 19 7 5"></polygon></svg>';
   function tickerShellHTML() {
     if (!S.settings.ticker) return '';
     return '<div class="ticker" aria-label="Scores and schedule ticker">' +
-      '<div class="tk-label" id="tk-label">' + esc(tickerLabel()) + '</div>' +
-      '<button type="button" class="tk-btn" data-act="tk-toggle" aria-label="' + (S.tickPaused ? 'Play ticker' : 'Pause ticker') + '">' +
-      (S.tickPaused ? '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="#FFFFFF"><polygon points="7 5 19 12 7 19 7 5"></polygon></svg>'
-        : '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"><line x1="8" y1="5" x2="8" y2="19"></line><line x1="16" y1="5" x2="16" y2="19"></line></svg>') +
-      '</button><div class="tk-view' + (S.tickPaused ? ' paused' : '') + '" id="tk-view"><div class="tk-track" id="tk-track">' + tickerItemsHTML() + '</div></div></div>';
+      '<div class="tk-label" id="tk-label">' + esc(isMLB() ? 'MLB' : abbr(S.team)) + '</div>' +
+      '<button type="button" class="tk-btn" data-act="tk-toggle" aria-label="' + (S.tickPaused ? 'Play ticker' : 'Pause ticker') + '">' + (S.tickPaused ? PLAY_SVG : PAUSE_SVG) + '</button>' +
+      '<div class="tk-view' + (S.tickPaused ? ' paused' : '') + '" id="tk-view"><div class="tk-track" id="tk-track">' + tickerItemsHTML() + '</div></div></div>';
   }
   function headerHTML() {
     var t = team(S.team);
@@ -297,13 +375,9 @@
   }
 
   /* ───────── ticker ───────── */
-  function tickerLabel() {
-    if (games().some(function (g) { return g.state === 'live'; })) return S.data && S.data.source === 'snapshot' ? 'Live · sample' : 'Live';
-    return 'On deck';
-  }
   function seriesFor(g) {
     var ids = [g.away.id, g.home.id];
-    return (S.data.series || []).filter(function (s) { return ids.indexOf(s.a) >= 0 && ids.indexOf(s.b) >= 0; })[0] || null;
+    return (S.data.series || []).filter(function (s) { return s.type === g.gameType && ids.indexOf(s.a) >= 0 && ids.indexOf(s.b) >= 0; })[0] || null;
   }
   function seriesText(s) {
     if (!s) return '';
@@ -311,38 +385,87 @@
     var lead = s.aw > s.bw ? s.a : s.b, hi = Math.max(s.aw, s.bw), lo = Math.min(s.aw, s.bw);
     return abbr(lead) + (s.over || hi >= s.need ? ' wins ' : ' leads ') + hi + '–' + lo;
   }
+  /* Next-round matchups the API still lists with placeholder clubs ("NL Higher Seed"). */
+  function tbdGame(g) { return !X.TEAM_BY_ID[g.away.id] || !X.TEAM_BY_ID[g.home.id]; }
+  function pairLabel(s) { return (s.over || Math.max(s.aw, s.bw) >= s.need) ? abbr(s.aw > s.bw ? s.a : s.b) : abbr(s.a) + '/' + abbr(s.b); }
+  function seriesStrength(s) { var st = S.data.standings; return Math.max((st[s.a] || {}).pct || 0, (st[s.b] || {}).pct || 0); }
+  function feederSeries(g) {
+    var ser = S.data.series || [];
+    if (g.gameType === 'W') return ser.filter(function (s) { return s.type === 'L'; });
+    var feed = g.gameType === 'L' ? 'D' : (g.gameType === 'D' ? 'F' : null), lg = leagueOf(g.round);
+    return ser.filter(function (s) { return s.type === feed && leagueOf(s.round) === lg; }).sort(function (a, b) { return seriesStrength(b) - seriesStrength(a); });
+  }
+  function tbdMatchup(g) {
+    if (g.gameType === 'W') {
+      return ['AL', 'NL'].map(function (L) { var l = (S.data.series || []).filter(function (s) { return s.type === 'L' && leagueOf(s.round) === L; })[0]; return l ? pairLabel(l) : L + ' champion'; }).join(' vs ');
+    }
+    var f = feederSeries(g);
+    if (!X.TEAM_BY_ID[g.away.id] && !X.TEAM_BY_ID[g.home.id] && f.length === 2) return pairLabel(f[0]) + ' vs ' + pairLabel(f[1]);
+    return [g.away, g.home].map(function (t) { return X.TEAM_BY_ID[t.id] ? abbr(t.id) : (t.name || 'TBD'); }).join(' vs ');
+  }
+  function tbdInvolves(g, id) {
+    if (involves(g, id)) return true;
+    return feederSeries(g).some(function (s) { return s.a === id || s.b === id; });
+  }
+  function latestPerSeries(finals) {
+    var by = {};
+    finals.forEach(function (g) {
+      var k = g.gameType + ':' + [g.away.id, g.home.id].sort().join('-');
+      if (!by[k] || g.date > by[k].date) by[k] = g;
+    });
+    return Object.keys(by).map(function (k) { return by[k]; }).sort(byDate).reverse();
+  }
   function tickerItems() {
-    var all = games().slice().sort(function (a, b) { return a.date < b.date ? -1 : 1; });
-    var live = all.filter(function (g) { return g.state === 'live'; });
-    var next = all.filter(function (g) { return g.state === 'pre' && !g.ifNec && g.detailed !== 'Postponed'; });
-    var finals = all.filter(function (g) { return g.state === 'final'; }).reverse();
+    var all = games().slice().sort(byDate), today = todayKey(), yest = yestKey();
+    var live = all.filter(function (g) { return g.state === 'live' && !tbdGame(g); });
+    var pre = all.filter(function (g) { return g.state === 'pre' && !tbdGame(g) && !g.ifNec && !/Postponed|Cancelled/.test(g.detailed); });
+    var tbdSeen = {}, tbd = all.filter(function (g) {
+      if (g.state !== 'pre' || !tbdGame(g)) return false;
+      var k = g.gameType + (leagueOf(g.round) || ''); if (tbdSeen[k]) return false; tbdSeen[k] = true; return true;
+    });
     var series = (S.data.series || []).filter(function (s) { return !s.over; });
+    var postFinals = latestPerSeries(all.filter(function (g) { return g.post && g.state === 'final' && !tbdGame(g); }));
+    var regFinals = all.filter(function (g) { return !g.post && g.state === 'final'; }).reverse();
     var out = [];
     function sec(title, arr) { if (!arr.length) return; out.push({ k: 'head', text: title }); arr.forEach(function (i) { out.push(i); }); }
     function L(g) { return { k: 'live', g: g }; }
     function N(g) { return { k: 'next', g: g }; }
     function F(g) { return { k: 'final', g: g }; }
     function SR(s) { return { k: 'series', s: s }; }
+    function TB(g) { return { k: 'tbd', g: g }; }
     if (isMLB()) {
       sec('Live', live.map(L));
-      sec('Up next', next.slice(0, 6).map(N));
+      sec('Up next', pre.slice(0, 6).map(N));
       sec(series.length && series[0].round ? series[0].round.replace(/^(AL|NL)\s+/, '') : 'Series', series.map(SR));
-      sec('Final', finals.slice(0, 6).map(F));
+      sec('Next round', tbd.map(TB));
+      sec('Final', postFinals.map(F).concat(regFinals.filter(function (g) { return g.day === today || g.day === yest; }).map(F)));
     } else {
       var id = S.team;
+      // the selected team's last 7 results (plus today's), from its own schedule
+      var recent = need('recent|' + id, function () { return API.teamSchedule(id, dayKey(new Date(Date.now() - 21 * 86400000)), dayKey(new Date())); });
+      // includes the team's own postseason games, so its latest results read in order
+      var pool = all.filter(function (g) { return g.state === 'final' && involves(g, id); });
+      if (Array.isArray(recent)) recent.forEach(function (g) { if (g.state === 'final' && !pool.some(function (p) { return p.pk === g.pk; })) pool.push(g); });
+      pool.sort(byDate).reverse();
+      var teamFinals = pool.filter(function (g, i) { return i < 7 || g.day === today; });
+      var teamPks = {}; teamFinals.forEach(function (g) { teamPks[g.pk] = true; });
+      var mineNext = pre.filter(function (g) { return involves(g, id) && (g.post || g.day === today); }).slice(0, 2);
       var mine = live.filter(function (g) { return involves(g, id); }).map(L)
         .concat(series.filter(function (s) { return s.a === id || s.b === id; }).map(SR))
-        .concat(next.filter(function (g) { return involves(g, id); }).slice(0, 2).map(N))
-        .concat(finals.filter(function (g) { return involves(g, id); }).slice(0, 2).map(F));
-      if (!mine.length) {
-        var r = S.data.standings[id];
-        mine = [{ k: 'note', text: S.data.phase === 'post' || S.data.phase === 'off' ? 'Season complete' + (r ? ' · ' + r.w + '–' + r.l : '') : 'No games in the next few days' }];
-      }
+        .concat(mineNext.map(N))
+        .concat(tbd.filter(function (g) { return tbdInvolves(g, id); }).map(TB))
+        .concat(postFinals.filter(function (g) { return involves(g, id) && !teamPks[g.pk]; }).map(F))
+        .concat(teamFinals.map(F));
+      if (!mine.length) mine = [{ k: 'note', text: S.data.phase === 'post' || S.data.phase === 'off' ? 'Season complete' : 'No games today' }];
       sec(team(id).name, mine);
+      var otherNext = pre.filter(function (g) { return !involves(g, id) && (g.post || g.day === today); });
       sec('Around the league', live.filter(function (g) { return !involves(g, id); }).map(L)
-        .concat(next.filter(function (g) { return !involves(g, id); }).slice(0, 3).map(N))
+        .concat(otherNext.filter(function (g) { return !g.post; }).map(N))
+        .concat(otherNext.filter(function (g) { return g.post; }).slice(0, 3).map(N))
         .concat(series.filter(function (s) { return s.a !== id && s.b !== id; }).map(SR))
-        .concat(finals.filter(function (g) { return !involves(g, id); }).slice(0, 2).map(F)));
+        .concat(tbd.filter(function (g) { return !tbdInvolves(g, id); }).map(TB))
+        .concat(postFinals.filter(function (g) { return !involves(g, id); }).map(F))
+        .concat(regFinals.filter(function (g) { return !involves(g, id) && g.day === today; }).map(F)));
     }
     if (!out.length) out.push({ k: 'note', text: 'No games scheduled this week' });
     return out;
@@ -352,11 +475,15 @@
     if (it.k === 'note') return '<div class="tk-item"><span class="tk-team win">' + esc(it.text) + '</span></div>';
     if (it.k === 'series') {
       var s = it.s;
-      function pips(w) { var h = ''; for (var i = 0; i < s.need; i++) h += '<span class="pip' + (i < w ? ' on' : '') + '"></span>'; return h; }
+      var pips = function (w) { var h = ''; for (var i = 0; i < s.need; i++) h += '<span class="pip' + (i < w ? ' on' : '') + '"></span>'; return h; };
       return '<div class="tk-item"><span class="tk-sub">' + esc(shortRound(s.round)) + '</span><span class="tk-team win">' + abbr(s.a) + '</span><span class="pips" aria-label="' + s.aw + ' wins">' + pips(s.aw) + '</span>' +
         '<span class="tk-team win">' + abbr(s.b) + '</span><span class="pips" aria-label="' + s.bw + ' wins">' + pips(s.bw) + '</span><span class="tk-sub">' + esc(seriesText(s)) + '</span></div>';
     }
     var g = it.g, a = abbr(g.away.id), h = abbr(g.home.id);
+    if (it.k === 'tbd') {
+      return '<div class="tk-item"><span class="tk-when">' + esc(whenLabel(g) + (g.tbd ? '' : ' ' + timeLabel(g))) + '</span><span class="tk-team win">' + esc(shortRound(g.round)) + ' ' + esc(tbdMatchup(g)) + '</span>' +
+        (g.tv ? '<span class="tk-sub">' + esc(g.tv) + '</span>' : '') + '</div>';
+    }
     if (it.k === 'live') {
       var aw = g.away.score > g.home.score, hw = g.home.score > g.away.score;
       return '<div class="tk-item"><span class="tk-live">' + (g.sample ? 'Sample' : 'Live') + '</span><span class="tk-team' + (aw ? ' win' : '') + '">' + a + ' ' + g.away.score + '</span>' +
@@ -365,9 +492,9 @@
     if (it.k === 'final') {
       var aW = g.away.score > g.home.score;
       return '<div class="tk-item"><span class="tk-final">Final</span><span class="tk-team ' + (aW ? 'win' : 'lose') + '">' + a + ' ' + g.away.score + '</span><span class="tk-team ' + (aW ? 'lose' : 'win') + '">' + h + ' ' + g.home.score + '</span>' +
-        '<span class="tk-sub">' + esc([g.round ? shortRound(g.round) + (g.gameNum ? ' G' + g.gameNum : '') : '', new Date(g.date).toLocaleDateString([], { weekday: 'short' })].filter(Boolean).join(' · ')) + '</span></div>';
+        '<span class="tk-sub">' + esc([g.round ? shortRound(g.round) + (g.gameNum ? ' G' + g.gameNum : '') : '', whenLabel(g)].filter(Boolean).join(' · ')) + '</span></div>';
     }
-    var prob = g.probAway && g.probHome ? g.probAway.split(' ').slice(-1)[0] + ' vs. ' + g.probHome.split(' ').slice(-1)[0] : '';
+    var prob = g.probAway && g.probHome ? lastName(g.probAway) + ' vs. ' + lastName(g.probHome) : '';
     return '<div class="tk-item"><span class="tk-when">' + esc(whenLabel(g) + ' ' + timeLabel(g)) + '</span><span class="tk-team win">' + a + ' <span class="tk-at">at</span> ' + h + '</span>' +
       '<span class="tk-sub">' + esc([g.round ? shortRound(g.round) + (g.gameNum ? ' G' + g.gameNum : '') : '', g.tv, prob].filter(Boolean).join(' · ')) + '</span></div>';
   }
@@ -379,7 +506,7 @@
   function refreshTicker() {
     var tr = document.getElementById('tk-track'), lb = document.getElementById('tk-label');
     if (tr) tr.innerHTML = tickerItemsHTML();
-    if (lb) lb.textContent = tickerLabel();
+    if (lb) lb.textContent = isMLB() ? 'MLB' : abbr(S.team);
   }
   function tickerSpeed() { var b = { slow: 35, normal: 55, fast: 85 }[S.settings.tickerSpeed] || 55; return isTV() ? b * 1.5 : b; }
   function tickStep(ts) {
@@ -396,52 +523,358 @@
     TK.raf = window.requestAnimationFrame(tickStep);
   }
 
-  /* ───────── dashboard sections ───────── */
-  function raceSeries() {
-    var d = S.data, race = d.race;
-    if (!race || !race.pts) return null;
-    var ids;
-    if (isMLB()) {
-      ids = X.TEAMS.map(function (t) { return t.id; }).filter(function (id) { return d.standings[id]; })
-        .sort(function (a, b) { return d.standings[b].pct - d.standings[a].pct; }).slice(0, 6);
+  /* ───────── feature chart (block R) ───────── */
+  var EXT_MODES = { lrace: 1, trace: 1, rpg: 1, tops: 1, tera: 1, hrrace: 1, season: 1, form10: 1, homeaway: 1, onerun: 1, hops: 1, rera: 1 };
+  function divTeams(div) { return X.TEAMS.filter(function (t) { return t.div === div; }).map(function (t) { return t.id; }); }
+  function topRecords(n) { var st = S.data.standings; return X.TEAMS.map(function (t) { return t.id; }).filter(function (id) { return st[id]; }).sort(function (a, b) { return st[b].pct - st[a].pct; }).slice(0, n); }
+  function legendHTML(hiText, restText, extra) {
+    return '<div class="legend"><span><i class="sw"></i>' + esc(hiText) + '</span>' + (extra || '') + (restText ? '<span><i class="sw gray"></i>' + esc(restText) + '</span>' : '') + '</div>';
+  }
+  function lineSize(tv) { return tv ? { w: 560, h: 500 } : { w: 760, h: 330 }; }
+
+  /* Standings at each month end → derived records (rank, games back, wild-card margin). */
+  function stopRecords(snap) {
+    var out = {};
+    X.DIVISIONS.forEach(function (dv) {
+      var ts = X.TEAMS.filter(function (t) { return t.div === dv.id && snap[t.id]; }).map(function (t) { var r = snap[t.id]; return { id: t.id, w: r[0], l: r[1], pct: r[0] + r[1] ? r[0] / (r[0] + r[1]) : 0.5 }; });
+      ts.sort(function (a, b) { return b.pct - a.pct || b.w - a.w; });
+      var L = ts[0];
+      ts.forEach(function (x, i) { out[x.id] = { w: x.w, l: x.l, pct: x.pct, rank: i + 1, gb: L ? ((L.w - x.w) + (x.l - L.l)) / 2 : 0, lead: i === 0 }; });
+    });
+    ['AL', 'NL'].forEach(function (lg) {
+      var ids = X.TEAMS.filter(function (t) { return X.DIV_BY_ID[t.div].league === lg && out[t.id]; }).map(function (t) { return t.id; });
+      var non = ids.filter(function (id) { return !out[id].lead; }).sort(function (a, b) { return out[b].pct - out[a].pct; });
+      var cut = non[2] ? out[non[2]] : null;
+      ids.forEach(function (id) { out[id].wc = cut ? ((out[id].w - out[id].l) - (cut.w - cut.l)) / 2 : 0; });
+    });
+    return out;
+  }
+  function raceRecs() {
+    var r = S.data.race;
+    if (!r || r.failed) return r;
+    if (!r._recs) r._recs = r.snaps.map(stopRecords);
+    return r;
+  }
+  function closestDivision() {
+    var st = S.data.standings, best = null;
+    X.DIVISIONS.forEach(function (dv) {
+      var ts = divTeams(dv.id).filter(function (id) { return st[id]; }).sort(function (a, b) { return st[b].pct - st[a].pct; });
+      if (ts.length < 2) return;
+      var L = st[ts[0]], s2 = st[ts[1]], gap = ((L.w - s2.w) + (s2.l - L.l)) / 2;
+      if (!best || gap < best.gap) best = { div: dv.id, gap: gap, leader: ts[0] };
+    });
+    return best;
+  }
+  function raceFamily(mode, tv) {
+    var r = raceRecs();
+    if (!r) return msgLoading('month-by-month standings');
+    if (r.failed) return msgNoData('month-end standings');
+    var recs = r._recs, labels = ['Start'].concat(r.labels.slice(1)), size = lineSize(tv);
+    if (mode === 'wc') return wcChart(r, tv);
+    var ids, hiId, rest;
+    if (mode === 'gb' || mode === 'rank') {
+      var div = isMLB() ? closestDivision().div : team(S.team).div;
+      ids = divTeams(div);
+      hiId = isMLB() ? closestDivision().leader : S.team;
+      rest = X.DIV_BY_ID[div].name + (isMLB() ? ' · the closest division race' : ' rivals');
     } else {
-      var div = team(S.team).div;
-      ids = X.TEAMS.filter(function (t) { return t.div === div; }).map(function (t) { return t.id; });
+      ids = isMLB() ? topRecords(6) : divTeams(team(S.team).div);
+      hiId = isMLB() ? ids[0] : S.team;
+      rest = isMLB() ? 'Next five best records' : X.DIV_BY_ID[team(S.team).div].name + ' rivals';
     }
-    var metric = S.settings.blocks.race;
-    var hiId = isMLB() ? ids[0] : S.team;
-    return { ids: ids, hiId: hiId, series: ids.map(function (id) {
-      return { id: id, abbr: abbr(id), hi: id === hiId, vals: (race.pts[id] || []).map(function (p, i) {
-        if (!p) return null;
-        if (metric === 'pct') return p[0] + p[1] ? p[0] / (p[0] + p[1]) : (i === 0 ? 0.5 : null);
-        return p[0] - p[1];
-      }) };
-    }) };
+    var series, lab = labels, opts;
+    if (mode === 'monthly') {
+      lab = r.months;
+      series = ids.map(function (id) {
+        return { label: abbr(id), hi: id === hiId, vals: recs.slice(1).map(function (cur, i) {
+          var a = recs[i][id], b = cur[id]; if (!a || !b) return null;
+          var dw = b.w - a.w, dl = b.l - a.l; return dw + dl ? dw / (dw + dl) : null;
+        }) };
+      });
+      opts = { fmt: rate3, zero: 0.5 };
+    } else {
+      var val = { gap: function (x) { return x.w - x.l; }, pct: function (x) { return x.w + x.l ? x.pct : 0.5; }, gb: function (x) { return x.gb; }, rank: function (x) { return x.rank; } }[mode];
+      series = ids.map(function (id) {
+        return { label: abbr(id), hi: id === hiId, vals: recs.map(function (rec, i) { return rec[id] && !(mode === 'rank' && i === 0) ? val(rec[id]) : null; }) };
+      });
+      opts = {
+        gap: { fmt: function (v) { return v === 0 ? '.500' : signed(v); }, zero: 0, ints: true },
+        pct: { fmt: rate3, zero: 0.5 },
+        gb: { fmt: function (v) { return v === 0 ? 'Lead' : halfText(v); }, invert: true, min: 0, zero: 0 },
+        rank: { fmt: function (v) { return ord(v); }, invert: true, min: 1, max: ids.length, step: 1 }
+      }[mode];
+    }
+    if (mode === 'rank') { lab = lab.slice(1); series.forEach(function (s) { s.vals = s.vals.slice(1); }); }   // everyone is tied before the first pitch
+    opts.labels = lab; opts.series = series; opts.w = size.w; opts.h = size.h; opts.aria = FEATURE_META[mode].sub();
+    return CH.lines(opts) + (tv ? '' : legendHTML(nick(hiId) + (isMLB() && (mode === 'gap' || mode === 'pct' || mode === 'monthly') ? ' · best record' : ''), rest));
   }
-  function raceCardHTML(tv) {
-    var mode = S.settings.blocks.race; if (mode === 'hide') return '';
-    var d = S.data, sub = mode === 'pct' ? 'Winning percentage · end of each month' : 'Games above .500 · end of each month';
+  function wcChart(r, tv) {
+    var recs = r._recs, fin = recs[recs.length - 1];
+    function panel(lg, focus) {
+      var ids = X.TEAMS.filter(function (t) { return X.DIV_BY_ID[t.div].league === lg && fin[t.id] && !fin[t.id].lead; }).map(function (t) { return t.id; })
+        .sort(function (a, b) { return fin[b].pct - fin[a].pct; }).slice(0, 6);
+      if (focus && ids.indexOf(focus) < 0) ids.push(focus);
+      var hiId = focus || ids[0];
+      var series = ids.map(function (id) { return { label: abbr(id), hi: id === hiId, vals: recs.map(function (rec, i) { return i === 0 ? 0 : (rec[id] ? rec[id].wc : null); }) }; });
+      return CH.lines({ labels: ['Start'].concat(r.labels.slice(1)), series: series, fmt: function (v) { return v === 0 ? '0' : signedHalf(v); }, zero: 0, zeroLabel: 'Last in', w: tv ? 560 : (isMLB() ? 600 : 760), h: tv ? (isMLB() ? 260 : 500) : 360, aria: lg + ' wild-card race' });
+    }
+    if (!isMLB()) return panel(teamLeague(S.team), S.team) + (tv ? '' : legendHTML(nick(S.team), teamLeague(S.team) + ' wild-card contenders'));
+    return '<div class="dual"><div><h3 class="dual-h">American League</h3>' + panel('AL') + '</div><div><h3 class="dual-h">National League</h3>' + panel('NL') + '</div></div>' +
+      (tv ? '' : legendHTML('Top wild-card team', 'Other contenders · 0 = the last wild-card spot'));
+  }
+
+  /* Season game logs (one request for every final) */
+  function seasonGames() { var d = S.data; return need('games', function () { return API.seasonGames(d.season, d.info.start, d.seasonEnd); }); }
+  function teamLog(all, id) {
+    return all.filter(function (g) { return g.a === id || g.h === id; }).map(function (g) {
+      var home = g.h === id, rs = home ? g.hs : g.as, ra = home ? g.as : g.hs;
+      return { d: g.d, home: home, rs: rs, ra: ra, win: rs > ra, margin: rs - ra, opp: home ? g.a : g.h };
+    });
+  }
+  function inWindow(day, w) { return day >= w.start && day <= w.end; }
+  function bestRecordId() { return topRecords(1)[0]; }
+  function seasonBars(tv) {
+    var all = seasonGames(); if (all === undefined) return msgLoading('every game this season');
+    if (isErr(all) || !all.length) return msgNoData('the season schedule');
+    var id = isMLB() ? bestRecordId() : S.team, log = teamLog(all, id), ticks = [], lastM = null;
+    log.forEach(function (g, i) { var m = g.d.slice(5, 7); if (m !== lastM) { lastM = m; ticks.push({ i: i, label: new Date(g.d + 'T12:00:00').toLocaleString('en-US', { month: 'short' }) }); } });
+    var size = tv ? { w: 560, h: 480 } : { w: 760, h: 300 };
+    var bars = log.map(function (g) {
+      return { win: g.win, margin: g.margin, tip: g.d + ' · ' + (g.home ? 'vs ' : 'at ') + abbr(g.opp) + ' · ' + (g.win ? 'W ' : 'L ') + Math.max(g.rs, g.ra) + '–' + Math.min(g.rs, g.ra) };
+    });
+    var w = log.filter(function (g) { return g.win; }).length;
+    return CH.gameBars({ games: bars, ticks: ticks, w: size.w, h: size.h, aria: nick(id) + ' game-by-game results' }) +
+      (tv ? '' : '<div class="legend"><span><i class="sw sq"></i>' + esc(nick(id) + ' wins · ' + w + '–' + (log.length - w) + (isMLB() ? ' · best record in MLB' : '')) + '</span><span><i class="sw sq gray"></i>Losses</span></div>');
+  }
+  function formChart(tv) {
+    var all = seasonGames(); if (all === undefined) return msgLoading('every game this season');
+    if (isErr(all) || !all.length) return msgNoData('the season schedule');
+    var id = isMLB() ? bestRecordId() : S.team, log = teamLog(all, id), labels = [], lastM = null;
+    var vals = log.map(function (g, i) {
+      var m = g.d.slice(5, 7); labels.push(m !== lastM ? new Date(g.d + 'T12:00:00').toLocaleString('en-US', { month: 'short' }) : ''); lastM = m;
+      if (i < 9) return null;
+      var w = 0; for (var k = i - 9; k <= i; k++) if (log[k].win) w++;
+      return w / 10;
+    });
+    var size = lineSize(tv);
+    return CH.lines({ labels: labels, series: [{ label: abbr(id), hi: true, vals: vals }], fmt: rate3, zero: 0.5, min: 0, max: 1, step: 0.2, w: size.w, h: size.h, aria: 'Rolling 10-game form' }) +
+      (tv ? '' : legendHTML(nick(id) + (isMLB() ? ' · best record in MLB' : '') + ' · each point covers the previous 10 games'));
+  }
+  function homeAway(tv) {
+    var all = seasonGames(); if (all === undefined) return msgLoading('every game this season');
+    if (isErr(all) || !all.length) return msgNoData('the season schedule');
+    var wins = S.data.windows, size = lineSize(tv), series;
+    function pct(list, pick) { var w = 0, n = 0; list.forEach(function (g) { var r = pick(g); if (r == null) return; n++; if (r) w++; }); return n ? w / n : null; }
+    if (isMLB()) {
+      series = [{ label: 'Home teams', hi: true, vals: wins.map(function (w) { return pct(all.filter(function (g) { return inWindow(g.d, w); }), function (g) { return g.hs > g.as; }); }) }];
+    } else {
+      var log = teamLog(all, S.team);
+      series = [
+        { label: 'Home', hi: true, vals: wins.map(function (w) { return pct(log.filter(function (g) { return g.home && inWindow(g.d, w); }), function (g) { return g.win; }); }) },
+        { label: 'Road', hi: true, dash: true, vals: wins.map(function (w) { return pct(log.filter(function (g) { return !g.home && inWindow(g.d, w); }), function (g) { return g.win; }); }) }
+      ];
+    }
+    return CH.lines({ labels: wins.map(function (w) { return w.label; }), series: series, fmt: rate3, zero: 0.5, w: size.w, h: size.h, aria: 'Home and road winning percentage by month' }) +
+      (tv ? '' : (isMLB() ? legendHTML('Home teams across MLB') : legendHTML(nick(S.team) + ' at home', '', '<span><i class="sw dash"></i>On the road</span>')));
+  }
+  function oneRun(tv) {
+    var all = seasonGames(); if (all === undefined) return msgLoading('every game this season');
+    if (isErr(all) || !all.length) return msgNoData('the season schedule');
+    var wins = S.data.windows, size = lineSize(tv);
+    function run(id) {
+      var log = teamLog(all, id).filter(function (g) { return Math.abs(g.margin) === 1; });
+      return { vals: wins.map(function (w) { var n = 0; log.forEach(function (g) { if (g.d <= w.end) n += g.win ? 1 : -1; }); return n; }), log: log };
+    }
+    var ids, hiId;
+    if (isMLB()) {
+      var ranked = X.TEAMS.map(function (t) { var r = run(t.id); return { id: t.id, v: r.vals[r.vals.length - 1] }; }).sort(function (a, b) { return b.v - a.v; });
+      ids = ranked.slice(0, 3).concat(ranked.slice(-3)).map(function (x) { return x.id; }); hiId = ids[0];
+    } else { ids = divTeams(team(S.team).div); hiId = S.team; }
+    var series = ids.map(function (id) { var r = run(id), w = r.log.filter(function (g) { return g.win; }).length; return { label: abbr(id), endLabel: abbr(id) + ' ' + w + '–' + (r.log.length - w), hi: id === hiId, vals: r.vals }; });
+    return CH.lines({ labels: wins.map(function (w) { return w.label; }), series: series, fmt: function (v) { return v === 0 ? '.500' : signed(v); }, zero: 0, ints: true, w: size.w, h: size.h, aria: 'One-run games' }) +
+      (tv ? '' : legendHTML(nick(hiId), isMLB() ? 'Best and worst one-run records' : X.DIV_BY_ID[team(S.team).div].name + ' rivals'));
+  }
+
+  /* Monthly club stats (date-range requests per month) */
+  function teamMonths() { var d = S.data; return need('months', function () { return API.teamMonths(d.season, d.windows); }); }
+  function monthsGuard() {
+    var M = teamMonths();
+    if (M === undefined) return { html: msgLoading('club stats month by month') };
+    if (isErr(M) || !M.length) return { html: msgNoData('monthly club stats') };
+    return { M: M };
+  }
+  function rpgChart(tv) {
+    var g = monthsGuard(); if (g.html) return g.html;
+    var M = g.M, size = lineSize(tv);
+    function rpg(st) { return st && st.gamesPlayed ? st.runs / st.gamesPlayed : null; }
+    var avg = M.map(function (w) { var r = 0, n = 0; Object.keys(w.hit).forEach(function (id) { r += w.hit[id].runs || 0; n += w.hit[id].gamesPlayed || 0; }); return n ? r / n : null; });
+    var series;
+    if (isMLB()) {
+      var tot = X.TEAMS.map(function (t) { return { id: t.id, r: M.reduce(function (a, w) { return a + ((w.hit[t.id] || {}).runs || 0); }, 0) }; }).sort(function (a, b) { return b.r - a.r; });
+      var best = tot[0].id, worst = tot[tot.length - 1].id;
+      series = [{ label: abbr(best), hi: true, vals: M.map(function (w) { return rpg(w.hit[best]); }) }, { label: abbr(worst), vals: M.map(function (w) { return rpg(w.hit[worst]); }) }, { label: 'MLB avg', ref: true, vals: avg }];
+      return CH.lines({ labels: M.map(function (w) { return w.label; }), series: series, fmt: function (v) { return v.toFixed(2); }, w: size.w, h: size.h, aria: 'Runs per game by month' }) +
+        (tv ? '' : legendHTML(nick(best) + ' · most runs scored', nick(worst) + ' · fewest runs scored', '<span><i class="sw ref"></i>MLB average</span>'));
+    }
+    var id = S.team;
+    series = [{ label: 'Scored', hi: true, vals: M.map(function (w) { return rpg(w.hit[id]); }) }, { label: 'Allowed', hi: true, dash: true, vals: M.map(function (w) { return rpg(w.pit[id]); }) }, { label: 'MLB avg', ref: true, vals: avg }];
+    return CH.lines({ labels: M.map(function (w) { return w.label; }), series: series, fmt: function (v) { return v.toFixed(2); }, w: size.w, h: size.h, aria: 'Runs scored and allowed per game by month' }) +
+      (tv ? '' : legendHTML('Runs scored per game', '', '<span><i class="sw dash"></i>Runs allowed per game</span><span><i class="sw ref"></i>MLB average</span>'));
+  }
+  function monthlyTeamStat(tv, group, field, fmt, low, avgFn, label) {
+    var g = monthsGuard(); if (g.html) return g.html;
+    var M = g.M, size = lineSize(tv);
+    var avg = M.map(function (w) { return avgFn(w[group]); });
+    var ids = isMLB() ? bestBy(group === 'hit' ? 'hit:ops' : 'pit:era', 3, low) : [S.team];
+    var series = ids.map(function (id, i) { return { label: abbr(id), hi: i === 0, vals: M.map(function (w) { var st = w[group][id]; return st && st[field] != null ? st[field] : null; }) }; });
+    series.push({ label: 'MLB avg', ref: true, vals: avg });
+    return CH.lines({ labels: M.map(function (w) { return w.label; }), series: series, fmt: fmt, w: size.w, h: size.h, aria: label + ' by month' }) +
+      (tv ? '' : legendHTML(nick(ids[0]) + (isMLB() ? ' · best ' + label + ' this season' : ''), isMLB() ? 'Next two best' : '', '<span><i class="sw ref"></i>MLB average</span>'));
+  }
+  function hrRace(tv) {
+    var g = monthsGuard(); if (g.html) return g.html;
+    var M = g.M, size = lineSize(tv);
+    function cum(id) { var t = 0; return M.map(function (w) { t += ((w.hit[id] || {}).homeRuns || 0); return t; }); }
+    var ids, hiId;
+    if (isMLB()) { ids = X.TEAMS.map(function (t) { var c = cum(t.id); return { id: t.id, v: c[c.length - 1] }; }).sort(function (a, b) { return b.v - a.v; }).slice(0, 6).map(function (x) { return x.id; }); hiId = ids[0]; }
+    else { ids = divTeams(team(S.team).div); hiId = S.team; }
+    return CH.lines({ labels: M.map(function (w) { return w.label; }), series: ids.map(function (id) { return { label: abbr(id), hi: id === hiId, vals: cum(id) }; }), fmt: function (v) { return String(Math.round(v)); }, min: 0, ints: true, w: size.w, h: size.h, aria: 'Team home run race' }) +
+      (tv ? '' : legendHTML(nick(hiId), isMLB() ? 'Next five home run totals' : X.DIV_BY_ID[team(S.team).div].name + ' rivals'));
+  }
+
+  /* Player month-by-month races */
+  function playerMonths(pid, group) { var d = S.data; return need('pm|' + pid + '|' + group, function () { return API.playerMonths(pid, group, d.season); }); }
+  function cumulative(months, upto) {
+    var c = { atBats: 0, hits: 0, baseOnBalls: 0, hitByPitch: 0, sacFlies: 0, totalBases: 0, earnedRuns: 0, inningsPitched: 0, strikeOuts: 0 };
+    Object.keys(months).forEach(function (m) {
+      if (+m > upto) return;
+      var st = months[m];
+      Object.keys(st).forEach(function (k) { c[k] = (c[k] || 0) + st[k]; });
+    });
+    return c;
+  }
+  function playerRace(players, group, valueFn, fmt, tv, aria, hiBest, low) {
+    var wins = S.data.windows, size = lineSize(tv), loading = false, failed = false;
+    var series = players.map(function (p) {
+      var pm = playerMonths(p.pid, group);
+      if (pm === undefined) { loading = true; return null; }
+      if (isErr(pm)) { failed = true; return null; }
+      return { label: lastName(p.name), vals: wins.map(function (w) { return valueFn(cumulative(pm, Math.max.apply(null, w.months))); }) };
+    });
+    if (loading) return msgLoading('month-by-month player stats');
+    series = series.filter(Boolean);
+    if (!series.length) return failed ? msgNoData('monthly player stats') : msgNoData('these players');
+    var lastVal = function (s) { for (var i = s.vals.length - 1; i >= 0; i--) if (s.vals[i] != null) return s.vals[i]; return null; };
+    var hiIdx = 0;
+    if (hiBest) series.forEach(function (s, i) { var v = lastVal(s), b = lastVal(series[hiIdx]); if (v != null && (b == null || (low ? v < b : v > b))) hiIdx = i; });
+    series[hiIdx].hi = true;
+    return { html: CH.lines({ labels: wins.map(function (w) { return w.label; }), series: series, fmt: fmt, w: size.w, h: size.h, aria: aria }), hiName: series[hiIdx].label };
+  }
+  function lrace(tv) {
+    var key = S.settings.blocks.raceStat, s = X.STAT_BY_KEY[key], field = X.COUNT_FIELDS[key];
+    if (!s || !field) return msgNoData('this stat');
+    var d = S.data, scope = S.team, pool = poolFor();
+    var rows = need('lead5|' + scope + '|' + key + '|' + pool, function () { return API.leaders(d.season, key, { teamId: scope === 'MLB' ? null : scope, limit: 5, pool: pool, gameType: 'R' }); });
+    if (rows === undefined) return msgLoading('the current leaders');
+    if (isErr(rows) || !rows.length) return msgNoData(s.name + ' leaders');
+    var players = rows.slice(0, 5).filter(function (r) { return r.pid; });
+    var isIP = field === 'inningsPitched';
+    var res = playerRace(players, s.group, function (c) { return field === '_xbh' ? (c.doubles || 0) + (c.triples || 0) + (c.homeRuns || 0) : (c[field] || 0); },
+      isIP ? ipText : function (v) { return String(Math.round(v)); }, tv, s.name + ' leader race', true, /losses|blown|caughtStealing|groundInto/i.test(key));
+    if (typeof res === 'string') return res;
+    return res.html + (tv ? '' : legendHTML(res.hiName + ' · current leader', 'Rest of the top five'));
+  }
+  function trace(tv) {
+    var key = S.settings.blocks.titleStat, s = X.STAT_BY_KEY[key], fn = X.RATE_FROM_PARTS[key];
+    if (!s || !fn) return msgNoData('this stat');
+    var d = S.data, scope = S.team;
+    var q = need('lead5|' + scope + '|' + key + '|QUALIFIED', function () { return API.leaders(d.season, key, { teamId: scope === 'MLB' ? null : scope, limit: 5, pool: 'QUALIFIED', gameType: 'R' }); });
+    if (q === undefined) return msgLoading('the current leaders');
+    var rows = Array.isArray(q) ? q : [];
+    if (rows.length < 2 && !isMLB()) {
+      var a = need('lead5|' + scope + '|' + key + '|ALL', function () { return API.leaders(d.season, key, { teamId: scope, limit: 5, pool: 'ALL', gameType: 'R' }); });
+      if (a === undefined) return msgLoading('the current leaders');
+      if (Array.isArray(a)) rows = a;
+    }
+    if (!rows.length) return msgNoData(s.name + ' leaders');
+    var low = s.group === 'pitching' && key !== 'pitching:strikeoutsPer9Inn' && key !== 'pitching:strikeoutWalkRatio';
+    var fmt = s.group === 'hitting' ? rate3 : function (v) { return v.toFixed(2); };
+    var res = playerRace(rows.slice(0, 5).filter(function (r) { return r.pid; }), s.group, fn, fmt, tv, s.name + ' title race', true, low);
+    if (typeof res === 'string') return res;
+    return res.html + (tv ? '' : legendHTML(res.hiName + ' · leads now', 'Rest of the top five'));
+  }
+  function hopsChart(tv) {
+    var r = roster(S.team);
+    if (r === undefined) return msgLoading('the roster');
+    if (isErr(r)) return msgNoData('the roster');
+    var players = r.hit.slice().sort(function (a, b) { return (b.stat.plateAppearances || 0) - (a.stat.plateAppearances || 0); }).slice(0, 5);
+    var res = playerRace(players, 'hitting', X.RATE_FROM_PARTS['hitting:onBasePlusSlugging'], rate3, tv, 'Top hitters OPS by month', true, false);
+    if (typeof res === 'string') return res;
+    return res.html + (tv ? '' : legendHTML(res.hiName + ' · best OPS now', 'The five hitters with the most plate appearances'));
+  }
+  function reraChart(tv) {
+    var r = roster(S.team);
+    if (r === undefined) return msgLoading('the roster');
+    if (isErr(r)) return msgNoData('the roster');
+    var players = r.pit.filter(function (p) { return (p.stat.gamesStarted || 0) > 0; }).sort(function (a, b) { return (b.stat.gamesStarted || 0) - (a.stat.gamesStarted || 0); }).slice(0, 5);
+    if (!players.length) return msgNoData('starting pitchers');
+    var res = playerRace(players, 'pitching', X.RATE_FROM_PARTS['pitching:earnedRunAverage'], function (v) { return v.toFixed(2); }, tv, 'Rotation ERA by month', true, true);
+    if (typeof res === 'string') return res;
+    return res.html + (tv ? '' : legendHTML(res.hiName + ' · lowest ERA now', 'The five pitchers with the most starts'));
+  }
+
+  var FEATURE_META = {
+    gap: { title: function () { return 'Race to October'; }, sub: function () { return 'Games above .500 · end of each month'; } },
+    pct: { title: function () { return 'Race to October'; }, sub: function () { return 'Winning percentage · end of each month'; } },
+    gb: { title: function () { return 'Race to October'; }, sub: function () { return 'Games back in the division · end of each month'; } },
+    wc: { title: function () { return 'Race to October'; }, sub: function () { return 'Wild-card race · games above or below the last spot'; } },
+    rank: { title: function () { return 'Race to October'; }, sub: function () { return 'Division standing · end of each month'; } },
+    monthly: { title: function () { return 'Race to October'; }, sub: function () { return 'Winning percentage in each month on its own'; } },
+    lrace: { title: function () { var s = X.STAT_BY_KEY[S.settings.blocks.raceStat]; return (s ? s.short : '') + ' race'; }, sub: function () { var s = X.STAT_BY_KEY[S.settings.blocks.raceStat]; return (s ? s.name : '') + ' · running total at each month’s end · top five'; } },
+    trace: { title: function () { var s = X.STAT_BY_KEY[S.settings.blocks.titleStat]; return (s ? s.short : '') + ' title race'; }, sub: function () { var s = X.STAT_BY_KEY[S.settings.blocks.titleStat]; return 'Season-to-date ' + (s ? s.name.toLowerCase() : '') + ' at each month’s end'; } },
+    rpg: { title: function () { return 'Runs per game'; }, sub: function () { return 'Scored and allowed in each month'; } },
+    tops: { title: function () { return 'Team OPS by month'; }, sub: function () { return 'Each month on its own'; } },
+    tera: { title: function () { return 'Team ERA by month'; }, sub: function () { return 'Each month on its own · lower is better'; } },
+    hrrace: { title: function () { return 'Home run race'; }, sub: function () { return 'Team home runs · running total'; } },
+    season: { title: function () { return 'Season in one picture'; }, sub: function () { return 'Every game · bar height = run margin'; } },
+    form10: { title: function () { return 'Rolling 10-game form'; }, sub: function () { return 'Winning percentage over the previous 10 games'; } },
+    homeaway: { title: function () { return 'Home vs. road'; }, sub: function () { return 'Winning percentage in each month'; } },
+    onerun: { title: function () { return 'One-run games'; }, sub: function () { return 'Games above .500 in one-run games · running total'; } },
+    hops: { title: function () { return 'Top hitters’ OPS'; }, sub: function () { return 'Season-to-date OPS at each month’s end'; } },
+    rera: { title: function () { return 'Rotation ERA'; }, sub: function () { return 'Season-to-date ERA at each month’s end'; } }
+  };
+  var BUILDERS = {
+    gap: function (tv) { return raceFamily('gap', tv); }, pct: function (tv) { return raceFamily('pct', tv); }, gb: function (tv) { return raceFamily('gb', tv); },
+    wc: function (tv) { return raceFamily('wc', tv); }, rank: function (tv) { return raceFamily('rank', tv); }, monthly: function (tv) { return raceFamily('monthly', tv); },
+    lrace: lrace, trace: trace, rpg: rpgChart,
+    tops: function (tv) { return monthlyTeamStat(tv, 'hit', 'ops', rate3, false, function (g) { var v = Object.keys(g).map(function (id) { return g[id].ops; }).filter(function (x) { return x != null; }); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : null; }, 'OPS'); },
+    tera: function (tv) { return monthlyTeamStat(tv, 'pit', 'era', function (v) { return v.toFixed(2); }, true, function (g) { var er = 0, ip = 0; Object.keys(g).forEach(function (id) { er += g[id].earnedRuns || 0; ip += g[id].inningsPitched || 0; }); return ip ? 9 * er / ip : null; }, 'ERA'); },
+    hrrace: hrRace, season: seasonBars, form10: formChart, homeaway: homeAway, onerun: oneRun, hops: hopsChart, rera: reraChart
+  };
+  function featureChart(tv) {
+    var mode = S.settings.blocks.race;
+    if (mode === 'hide' || !S.data) return null;
+    var note = '';
+    if (X.TEAM_ONLY_CHARTS[mode] && isMLB()) { note = 'Pick a team to see ' + FEATURE_META[mode].title().toLowerCase(); mode = 'gap'; }
+    var meta = FEATURE_META[mode] || FEATURE_META.gap;
     var body;
-    if (!d || !d.race) body = '<div class="loading">Loading month-by-month standings</div>';
-    else if (d.race.failed) body = '<div class="empty"><strong>Chart unavailable</strong>Month-end standings did not load. They will retry on the next refresh.</div>';
-    else {
-      var rs = raceSeries();
-      body = CH.race({ labels: d.race.labels, series: rs.series, metric: mode, aria: 'Season race: ' + sub, w: tv ? 560 : 760, h: tv ? 500 : 330 }) +
-        (tv ? '' : '<div class="legend"><span><i class="sw"></i>' + esc(nick(rs.hiId) + (isMLB() ? ' · best record' : '')) + '</span><span><i class="sw gray"></i>' + esc(isMLB() ? 'Next five best records' : X.DIV_BY_ID[team(S.team).div].name + ' rivals') + '</span></div>');
-    }
-    return { title: 'Race to October', sub: sub, body: body };
+    if (EXT_MODES[mode] && !isLive()) body = msgSnapshot();
+    else if (EXT_MODES[mode] && !S.data.windows) body = msgNoData('the season calendar');
+    else body = (BUILDERS[mode] || BUILDERS.gap)(tv) || msgNoData(meta.title());
+    return { title: meta.title(), sub: meta.sub() + (note ? ' · ' + note : ''), body: body };
   }
+
+  /* ───────── other dashboard sections ───────── */
   function standingsCardHTML(tv) {
     if (S.settings.blocks.standings === 'hide' || !S.data) return null;
     var d = S.data, rows, title, col;
     if (isMLB()) {
       title = 'Best records'; col = 'PCT';
-      rows = X.TEAMS.filter(function (t) { return d.standings[t.id]; }).sort(function (a, b) { return d.standings[b.id].pct - d.standings[a.id].pct; }).slice(0, tv ? 8 : 6)
-        .map(function (t) { var r = d.standings[t.id]; return { id: t.id, wl: r.w + '–' + r.l, ex: rate3(r.pct) }; });
+      rows = topRecords(tv ? 8 : 6).map(function (id) { var r = d.standings[id]; return { id: id, wl: r.w + '–' + r.l, ex: rate3(r.pct) }; });
     } else {
       var div = team(S.team).div; title = X.DIV_BY_ID[div].name; col = 'GB';
-      rows = X.TEAMS.filter(function (t) { return t.div === div && d.standings[t.id]; }).sort(function (a, b) { return d.standings[b.id].pct - d.standings[a.id].pct; })
-        .map(function (t) { var r = d.standings[t.id]; return { id: t.id, wl: r.w + '–' + r.l, ex: r.gb === '-' || r.gb === 0 || r.gb === '0.0' ? '—' : r.gb }; });
+      rows = divTeams(div).filter(function (id) { return d.standings[id]; }).sort(function (a, b) { return d.standings[b].pct - d.standings[a].pct; })
+        .map(function (id) { var r = d.standings[id]; return { id: id, wl: r.w + '–' + r.l, ex: r.gb === '-' || r.gb === 0 || r.gb === '0.0' ? '—' : r.gb }; });
     }
     var html = '<div class="st-row head"><span>Team</span><span>W–L</span><span>' + col + '</span></div>' + rows.map(function (r) {
       var t = X.TEAM_BY_ID[r.id];
@@ -450,23 +883,27 @@
     return { title: title, body: html };
   }
   function leaderBodyHTML(statKey, kind, max) {
-    var st = leaderState(statKey);
-    if (st.loading) return '<div class="loading">Loading leaders</div>';
-    if (st.missing) return '<div class="empty"><strong>Live data board</strong>This stat loads from the MLB Stats API when the board is online.</div>';
-    if (st.error) return '<div class="empty"><strong>Didn’t load</strong>The MLB Stats API didn’t answer for this board. It retries on the next refresh.</div>';
+    var st = leaderState(statKey), s = X.STAT_BY_KEY[statKey];
+    if (st.loading) return msgLoading('leaders');
+    if (st.missing) return msgSnapshot();
+    if (st.error) return msgNoData(s ? s.name + ' leaders' : 'this board');
     var rows = st.rows.slice(0, max || S.settings.limit);
     if (!rows.length) return '<div class="empty"><strong>No leaders yet</strong>No ' + (isMLB() ? '' : team(S.team).name + ' ') + 'players qualify for this stat. Try “All players” in Settings.</div>';
-    var shares = CH.shares(rows), counts = {};
+    var shares = CH.shares(rows), counts = {}, q = s && s.rate ? qualifier() : null, starred = false;
     rows.forEach(function (r) { counts[r.rank] = (counts[r.rank] || 0) + 1; });
     function rk(r) { return (counts[r.rank] > 1 ? 'T' : '') + r.rank; }
+    function star(r) { if (q && r.pid && !q(s.rate, r.pid)) { starred = true; return '*'; } return ''; }
+    var html;
     if (kind === 'feat') {
-      return '<div class="lb">' + rows.map(function (r, i) {
-        return '<div class="lrow' + (i === 0 ? ' top' : '') + '"><span class="lrank">' + rk(r) + '</span><span class="lname"><span class="lbar" style="width:' + Math.round(shares[i] * 100) + '%"></span><b>' + esc(r.name) + '</b><em>' + esc(abbr(r.teamId)) + '</em></span><span class="lval">' + esc(r.value) + '</span></div>';
+      html = '<div class="lb">' + rows.map(function (r, i) {
+        return '<div class="lrow' + (i === 0 ? ' top' : '') + '"><span class="lrank">' + rk(r) + '</span><span class="lname"><span class="lbar" style="width:calc((100% + var(--slant)) * ' + shares[i].toFixed(3) + ')"></span><b>' + esc(r.name) + star(r) + '</b><em>' + esc(abbr(r.teamId)) + '</em></span><span class="lval">' + esc(r.value) + '</span></div>';
+      }).join('') + '</div>';
+    } else {
+      html = '<div class="bd-list">' + rows.map(function (r, i) {
+        return '<div class="brow' + (i === 0 ? ' top' : '') + '"><div class="brow-top"><span title="' + esc(r.name + ' · ' + nick(r.teamId)) + '">' + esc(rk(r) + ' ' + shortName(r.name)) + star(r) + '</span><span>' + esc(r.value) + '</span></div><div class="btrack"><div class="bfill" style="width:' + Math.round(shares[i] * 100) + '%"></div></div></div>';
       }).join('') + '</div>';
     }
-    return '<div class="bd-list">' + rows.map(function (r, i) {
-      return '<div class="brow' + (i === 0 ? ' top' : '') + '"><div class="brow-top"><span title="' + esc(r.name + ' · ' + nick(r.teamId)) + '">' + esc(rk(r) + ' ' + shortName(r.name)) + '</span><span>' + esc(r.value) + '</span></div><div class="btrack"><div class="bfill" style="width:' + Math.round(shares[i] * 100) + '%"></div></div></div>';
-    }).join('') + '</div>';
+    return html + (starred ? '<div class="lb-note">* Not yet qualified (needs 3.1 plate appearances or 1 inning per team game)</div>' : '');
   }
   function clubsCardHTML() {
     var key = S.settings.blocks.clubs; if (!key || key === 'hide' || !S.data) return null;
@@ -484,19 +921,19 @@
     var html = CH.clubs({ items: items, low: m.low, label: m.label, avgText: avgText });
     var legend = isMLB() ? ((d.series || []).some(function (s) { return !s.over; }) ? 'Still playing' : 'Division leaders') : team(S.team).name;
     return { title: m.label + ' · all 30 clubs', sub: m.low ? 'Above the line = better than average (lower is better)' : 'Above the line = better than the MLB average', legend: legend,
-      body: html || '<div class="empty"><strong>No data</strong>' + esc(m.label) + ' is not in this data set.</div>' };
+      body: html || (isLive() ? msgNoData(m.label) : msgSnapshot()) };
   }
   function upcoming(n) {
-    var all = games().filter(function (g) { return g.state !== 'final' && (isMLB() || involves(g, S.team)); }).sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+    var all = games().filter(function (g) { return g.state !== 'final' && (isMLB() || involves(g, S.team)); }).sort(byDate);
     return all.slice(0, n);
   }
   function gameCardHTML(g) {
     var cls = g.state === 'live' ? ' live' : (whenLabel(g) === 'Today' ? ' today' : '');
-    var s = seriesFor(g);
+    var s = seriesFor(g), tbd = tbdGame(g);
     var hd = g.state === 'live' ? (g.sample ? 'Sample · ' : 'Live · ') + esc(g.inning || 'In progress') : esc(whenLabel(g) + ' · ' + timeLabel(g));
-    var match = g.state === 'live' ? abbr(g.away.id) + ' ' + g.away.score + ' <span class="at">·</span> ' + abbr(g.home.id) + ' ' + g.home.score : abbr(g.away.id) + ' <span class="at">at</span> ' + abbr(g.home.id);
+    var match = tbd ? esc(tbdMatchup(g)) : (g.state === 'live' ? abbr(g.away.id) + ' ' + g.away.score + ' <span class="at">·</span> ' + abbr(g.home.id) + ' ' + g.home.score : abbr(g.away.id) + ' <span class="at">at</span> ' + abbr(g.home.id));
     var line = [g.round ? shortRound(g.round) + (g.gameNum ? ' · Game ' + g.gameNum : '') : '', g.ifNec ? 'If necessary' : (s ? seriesText(s) : '')].filter(Boolean).join(' · ');
-    var prob = g.probAway && g.probHome ? g.probAway + ' vs. ' + g.probHome : (g.state === 'pre' ? 'Probable pitchers TBD' : '');
+    var prob = g.probAway && g.probHome ? g.probAway + ' vs. ' + g.probHome : (g.state === 'pre' && !tbd ? 'Probable pitchers TBD' : '');
     return '<div class="game' + cls + '"><div class="game-hd"><span>' + hd + '</span><span>' + esc(g.tv) + '</span></div><div class="game-bd"><div class="game-m">' + match + '</div>' +
       (line ? '<div class="game-s">' + esc(line) + '</div>' : '') + (prob ? '<div class="game-p">' + esc(prob) + '</div>' : '') + '</div></div>';
   }
@@ -509,17 +946,17 @@
   function dashMainHTML() {
     if (!S.data) return '<div class="card loading">Loading the MLB Stats API</div>';
     var b = S.settings.blocks, out = [];
-    var race = raceCardHTML(false), std = standingsCardHTML(false);
-    if (race || std) {
+    var fc = featureChart(false), std = standingsCardHTML(false);
+    if (fc || std) {
       out.push('<div class="row">' +
-        (race ? '<section class="card race" aria-label="Race to October chart"><div class="card-hd"><h2>' + race.title + '</h2><span class="sub">' + esc(race.sub) + '</span></div><div class="chart-body">' + race.body + '</div></section>' : '') +
+        (fc ? '<section class="card race" aria-label="' + esc(fc.title) + '"><div class="card-hd"><h2>' + esc(fc.title) + '</h2><span class="sub">' + esc(fc.sub) + '</span></div><div class="chart-body">' + fc.body + '</div></section>' : '') +
         (std ? '<section class="card standings" aria-label="Standings"><div class="card-hd"><h2>' + esc(std.title) + '</h2></div>' + std.body + '</section>' : '') + '</div>');
     }
     var feats = ['feat1', 'feat2'].filter(function (k) { return b[k] && b[k] !== 'hide'; });
     if (feats.length) {
       out.push('<section class="feat" aria-label="Featured leaders">' + feats.map(function (k) {
         var s = X.STAT_BY_KEY[b[k]]; if (!s) return '';
-        return '<article class="card"><div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + ' · bar = share of #1</span></div>' + leaderBodyHTML(b[k], 'feat') + '</article>';
+        return '<article class="card"><div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + '</span></div>' + leaderBodyHTML(b[k], 'feat') + '</article>';
       }).join('') + '</section>');
     }
     var boards = ['board1', 'board2', 'board3', 'board4', 'board5', 'board6'].filter(function (k) { return b[k] && b[k] !== 'hide'; });
@@ -546,7 +983,7 @@
     var d = S.data;
     var src = d && d.source === 'snapshot'
       ? 'Snapshot of MLB Stats API data · live data could not be reached here'
-      : 'Data: MLB Stats API · ' + (S.settings.gameType === 'P' ? 'Postseason' : 'Regular season') + ' stats';
+      : 'Data: MLB Stats API · ' + (S.settings.gameType === 'P' ? 'Postseason' : 'Regular season') + ' stats · stats refresh daily at 5 AM';
     return '<footer class="foot"><span>' + esc(src) + '</span><span>Times shown in your time zone</span></footer>';
   }
 
@@ -558,8 +995,8 @@
     var list = tvCharts(); if (!list.length) return '';
     var which = list[S.tv.chart % list.length];
     if (which === 'race') {
-      var r = raceCardHTML(true);
-      return '<div class="card-hd"><h2>' + r.title + '</h2><span class="sub">' + esc(r.sub) + '</span></div><div class="tv-fill fade-in">' + r.body + '</div>' + progressHTML(list.length, S.tv.chart % list.length);
+      var r = featureChart(true);
+      return '<div class="card-hd"><h2>' + esc(r.title) + '</h2><span class="sub">' + esc(r.sub) + '</span></div><div class="tv-fill fade-in">' + r.body + '</div>' + progressHTML(list.length, S.tv.chart % list.length);
     }
     var c = clubsCardHTML();
     return '<div class="card-hd"><h2>' + esc(c.title) + '</h2><span class="sub">' + esc(c.legend) + ' highlighted</span></div><div class="tv-fill fade-in">' + c.body + '</div>' + progressHTML(list.length, S.tv.chart % list.length);
@@ -574,22 +1011,23 @@
     var up = upcoming(5);
     if (!up.length) return '<div class="empty"><strong>No games this week</strong></div>';
     return '<div class="tv-games">' + up.map(function (g) {
-      var s = seriesFor(g);
+      var s = seriesFor(g), tbd = tbdGame(g);
       var when = g.state === 'live' ? '<b>' + (g.sample ? 'Sample' : 'Live') + '</b>' + esc(g.inning) : '<b>' + esc(whenLabel(g)) + '</b>' + esc(timeLabel(g));
-      var m = g.state === 'live' ? abbr(g.away.id) + ' ' + g.away.score + ' · ' + abbr(g.home.id) + ' ' + g.home.score : abbr(g.away.id) + ' at ' + abbr(g.home.id);
+      var m = tbd ? esc(tbdMatchup(g)) : (g.state === 'live' ? abbr(g.away.id) + ' ' + g.away.score + ' · ' + abbr(g.home.id) + ' ' + g.home.score : abbr(g.away.id) + ' at ' + abbr(g.home.id));
       return '<div class="tv-game"><div class="when">' + when + '</div><div><div class="m">' + m + '</div><div class="s">' + esc([g.round ? shortRound(g.round) + (g.gameNum ? ' G' + g.gameNum : '') : '', g.ifNec ? 'If necessary' : (s ? seriesText(s) : ''), g.tv].filter(Boolean).join(' · ')) + '</div></div></div>';
     }).join('') + '</div>';
   }
+  function tvStackHTML() {
+    var std = standingsCardHTML(true);
+    return (std ? '<section class="tv-panel" aria-label="Standings"><div class="card-hd"><h2>' + esc(std.title) + '</h2></div>' + std.body + '</section>' : '') +
+      (S.settings.blocks.upnext !== 'hide' ? '<section class="tv-panel" aria-label="Coming up"><div class="card-hd"><h2>Coming up</h2></div>' + tvGamesHTML() + '</section>' : '');
+  }
   function tvMainHTML() {
     if (!S.data) return '<div class="tv-main"><div class="tv-panel loading">Loading the MLB Stats API</div></div>';
-    var std = standingsCardHTML(true);
     return '<div class="tv-main">' +
       '<section class="tv-panel" id="tv-chart" aria-label="Charts">' + tvChartPanelHTML() + '</section>' +
       '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + tvBoardPanelHTML() + '</section>' +
-      '<div class="tv-stack">' +
-      (std ? '<section class="tv-panel" aria-label="Standings"><div class="card-hd"><h2>' + esc(std.title) + '</h2></div>' + std.body + '</section>' : '') +
-      (S.settings.blocks.upnext !== 'hide' ? '<section class="tv-panel" aria-label="Coming up"><div class="card-hd"><h2>Coming up</h2></div>' + tvGamesHTML() + '</section>' : '') +
-      '</div></div>' +
+      '<div class="tv-stack" id="tv-stack">' + tvStackHTML() + '</div></div>' +
       '<div class="tv-gear" id="tv-gear"><button type="button" data-act="fullscreen">Full screen</button><button type="button" data-act="open-settings">Settings</button><button type="button" data-act="exit-tv">Exit TV mode</button></div>';
   }
   function tvTick() {
@@ -606,7 +1044,7 @@
   }
   function requestWake() {
     if (S.wake || !navigator.wakeLock || !navigator.wakeLock.request) return;
-    navigator.wakeLock.request('screen').then(function (l) { S.wake = l; l.addEventListener && l.addEventListener('release', function () { S.wake = null; }); }).catch(function () { /* not granted */ });
+    navigator.wakeLock.request('screen').then(function (l) { S.wake = l; if (l.addEventListener) l.addEventListener('release', function () { S.wake = null; }); }).catch(function () { /* not granted */ });
   }
   function releaseWake() { if (S.wake) { try { S.wake.release(); } catch (e) { /* ignore */ } S.wake = null; } }
   var idleTimer = null;
@@ -623,14 +1061,14 @@
       return '<button type="button" data-act="seg" data-key="' + key + '" data-val="' + esc(o[0]) + '" aria-pressed="' + (String(current) === String(o[0])) + '">' + esc(o[1]) + '</button>';
     }).join('') + '</div>';
   }
-  function statOptions(current) {
-    var h = '<option value="hide"' + (current === 'hide' ? ' selected' : '') + '>Hide this block</option>';
+  function statOptions(current, filter, allowHide) {
+    var h = allowHide === false ? '' : '<option value="hide"' + (current === 'hide' ? ' selected' : '') + '>Hide this block</option>';
     X.STAT_GROUPS.forEach(function (g) {
-      h += '<optgroup label="' + g.label + '">';
-      X.STATS.filter(function (s) { return s.group === g.id; }).forEach(function (s) {
-        h += '<option value="' + s.key + '"' + (s.key === current ? ' selected' : '') + '>' + esc(s.short + ' · ' + s.name) + '</option>';
-      });
-      h += '</optgroup>';
+      var list = X.STATS.filter(function (s) { return s.group === g.id && (!filter || filter(s)); });
+      if (!list.length) return;
+      h += '<optgroup label="' + g.label + '">' + list.map(function (s) {
+        return '<option value="' + s.key + '"' + (s.key === current ? ' selected' : '') + '>' + esc(s.short + ' · ' + s.name) + '</option>';
+      }).join('') + '</optgroup>';
     });
     return h;
   }
@@ -645,8 +1083,13 @@
     });
     return h;
   }
-  function pickerHTML(code, id, label, optionsHTML) {
-    return '<div class="pkr"><label for="pk-' + id + '"><span class="code">' + code + '</span>' + esc(label) + '</label><select class="set-select" id="pk-' + id + '" data-set="blocks.' + id + '" data-code="' + code + '">' + optionsHTML + '</select></div>';
+  function featureOptions(current) {
+    return X.FEATURE_GROUPS.map(function (g) {
+      return '<optgroup label="' + esc(g.label) + '">' + g.options.map(function (o) { return '<option value="' + o[0] + '"' + (current === o[0] ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</optgroup>';
+    }).join('') + '<option value="hide"' + (current === 'hide' ? ' selected' : '') + '>Hide this block</option>';
+  }
+  function pickerHTML(code, id, label, optionsHTML, extra) {
+    return '<div class="pkr"><label for="pk-' + id + '"><span class="code">' + code + '</span>' + esc(label) + '</label><select class="set-select" id="pk-' + id + '" data-set="blocks.' + id + '" data-code="' + code + '">' + optionsHTML + '</select>' + (extra || '') + '</div>';
   }
   function settingsHTML() {
     var s = S.settings, b = s.blocks, t = team(S.team);
@@ -659,10 +1102,14 @@
     var snapshot = S.data && S.data.source === 'snapshot';
     var map = '<div class="map" aria-hidden="true">' +
       '<div class="hdrblk span2">Header</div><div class="hdrblk span1" data-map="T1">T1</div><div class="hdrblk span1" data-map="T2">T2</div><div class="hdrblk span1" data-map="T3">T3</div><div class="hdrblk span1" data-map="T4">T4</div>' +
-      '<div class="span4" data-map="R">R · Race chart</div><div class="span2" data-map="S">S · Standings</div>' +
+      '<div class="span4" data-map="R">R · Feature chart</div><div class="span2" data-map="S">S · Standings</div>' +
       '<div class="span3" data-map="F1">F1 · Featured</div><div class="span3" data-map="F2">F2 · Featured</div>' +
       '<div class="span1" data-map="B1">B1</div><div class="span1" data-map="B2">B2</div><div class="span1" data-map="B3">B3</div><div class="span1" data-map="B4">B4</div><div class="span1" data-map="B5">B5</div><div class="span1" data-map="B6">B6</div>' +
       '<div class="span6" data-map="C">C · All-clubs chart</div><div class="span6" data-map="U">U · Coming up</div></div>';
+    var sub = '';
+    if (b.race === 'lrace') sub = '<label class="sublabel" for="pk-raceStat">Stat for the leader race</label><select class="set-select" id="pk-raceStat" data-set="blocks.raceStat" data-code="R">' + statOptions(b.raceStat, function (x) { return X.COUNT_FIELDS[x.key]; }, false) + '</select>';
+    if (b.race === 'trace') sub = '<label class="sublabel" for="pk-titleStat">Stat for the title race</label><select class="set-select" id="pk-titleStat" data-set="blocks.titleStat" data-code="R">' + statOptions(b.titleStat, function (x) { return X.RATE_FROM_PARTS[x.key]; }, false) + '</select>';
+    if (X.TEAM_ONLY_CHARTS[b.race]) sub = '<span class="hint" style="font-size:13px;color:var(--muted)">Shows on team pages. The MLB page shows games above .500 instead.</span>';
     return '<div class="set-top"><div class="set-top-in"><h1>Settings</h1><div class="set-actions"><button type="button" class="btn-hdr" data-act="close-settings">Back to the board</button></div></div></div><div class="hdr-strip"></div>' +
       '<div class="set-wrap">' +
       '<section class="set-sec" aria-labelledby="sec-display"><div class="card-hd"><h2 id="sec-display">Display</h2><span class="sub">Saved in this browser</span></div><div class="set-body">' +
@@ -674,11 +1121,11 @@
       '</div></section>' +
       '<section class="set-sec" aria-labelledby="sec-data"><div class="card-hd"><h2 id="sec-data">Data</h2><span class="sub">MLB Stats API</span></div><div class="set-body">' +
       '<div class="field"><label for="set-defaultTeam">Default team</label><select class="set-select" id="set-defaultTeam" data-set="defaultTeam">' + teamOpts + '</select><span class="hint">The board opens on this team. Changing it also switches the board now.</span></div>' +
-      '<div class="field"><span class="flabel">Stats from</span>' + segHTML('gameType', s.gameType, [['R', 'Regular season'], ['P', 'Postseason']]) + '<span class="hint">Applies to leader boards and club stats. Standings and the race chart always use the regular season.</span></div>' +
-      '<div class="field"><label for="set-pool">League player pool</label>' + sel('set-pool', 'pool', [['QUALIFIED', 'Qualified players'], ['ALL', 'All players'], ['ROOKIES', 'Rookies only']]) + '<span class="hint">Qualified means enough plate appearances or innings to rank in rate stats like AVG and ERA.</span></div>' +
-      '<div class="field"><label for="set-teamPool">Club player pool</label>' + sel('set-teamPool', 'teamPool', [['QUALIFIED', 'Qualified players'], ['ALL', 'All players'], ['ROOKIES', 'Rookies only']]) + '<span class="hint">Used when a team is selected. Clubs often have only one or two qualified pitchers.</span></div>' +
+      '<div class="field"><span class="flabel">Stats from</span>' + segHTML('gameType', s.gameType, [['R', 'Regular season'], ['P', 'Postseason']]) + '<span class="hint">Applies to leader boards and club stats. Standings and the feature chart always use the regular season.</span></div>' +
+      '<div class="field"><label for="set-pool">MLB page player pool</label>' + sel('set-pool', 'pool', [['QUALIFIED', 'Qualified players'], ['ALL', 'All players'], ['ROOKIES', 'Rookies only']]) + '<span class="hint">Qualified means enough plate appearances or innings to rank in rate stats like AVG and ERA.</span></div>' +
+      '<div class="field"><label for="set-teamPool">Team page player pool</label>' + sel('set-teamPool', 'teamPool', [['ALL', 'All players'], ['QUALIFIED', 'Qualified players'], ['ROOKIES', 'Rookies only']]) + '<span class="hint">With all players, rate-stat boards mark anyone not yet qualified with an asterisk.</span></div>' +
       '<div class="field"><span class="flabel">Leaders per board</span>' + segHTML('limit', s.limit, [[3, '3'], [5, '5'], [10, '10']]) + '</div>' +
-      '<div class="field"><span class="flabel">Auto-refresh</span>' + segHTML('refresh', s.refresh, [[true, 'On'], [false, 'Off']]) + '<span class="hint">Scores refresh every 30 seconds while games are live and every 5 minutes otherwise. Stats refresh every 15 minutes.</span></div>' +
+      '<div class="field"><span class="flabel">Auto-refresh</span>' + segHTML('refresh', s.refresh, [[true, 'On'], [false, 'Off']]) + '<span class="hint">Scores check every minute while a game is live and wake up around each scheduled first pitch. Stats, standings and charts refresh once a day at 5 AM.</span></div>' +
       (snapshot ? '<div class="field"><span class="flabel">Sample live games</span>' + segHTML('sampleLive', s.sampleLive, [[false, 'Off'], [true, 'On']]) + '<span class="hint">Preview only. The board is showing a saved snapshot, so this adds two made-up in-progress scores to show how live games look in the ticker.</span></div>' : '') +
       '</div></section>' +
       '<section class="set-sec" aria-labelledby="sec-blocks"><div class="card-hd"><h2 id="sec-blocks">Blocks</h2><span class="sub">Choose what each block shows</span></div><div class="set-body">' + map +
@@ -686,7 +1133,7 @@
       '<h3 class="sec-title" style="font-size:22px">Header tiles</h3><div class="pickers">' +
       X.BLOCKS.tiles.map(function (k) { return pickerHTML(k.code, k.id, k.label, metricOptions(b[k.id], true, false)); }).join('') + '</div>' +
       '<h3 class="sec-title" style="font-size:22px">Charts and lists</h3><div class="pickers">' +
-      pickerHTML('R', 'race', 'Race chart', [['gap', 'Games above .500'], ['pct', 'Winning percentage'], ['hide', 'Hide this block']].map(function (o) { return '<option value="' + o[0] + '"' + (b.race === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')) +
+      pickerHTML('R', 'race', 'Feature chart', featureOptions(b.race), sub) +
       pickerHTML('S', 'standings', 'Standings', [['show', 'Show'], ['hide', 'Hide this block']].map(function (o) { return '<option value="' + o[0] + '"' + (b.standings === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')) +
       pickerHTML('C', 'clubs', 'All-clubs chart', metricOptions(b.clubs, true, true)) +
       pickerHTML('U', 'upnext', 'Coming up', [['show', 'Show'], ['hide', 'Hide this block']].map(function (o) { return '<option value="' + o[0] + '"' + (b.upnext === o[0] ? ' selected' : '') + '>' + o[1] + '</option>'; }).join('')) + '</div>' +
@@ -713,11 +1160,9 @@
   function refreshMain() {
     if (S.view !== 'dash') return;
     if (isTV()) {
-      var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
+      var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
       if (!a || !c) { render(); return; }
-      a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML();
-      var stack = document.querySelector('.tv-stack');
-      if (stack) { var tmp = document.createElement('div'); tmp.innerHTML = tvMainHTML(); var ns = tmp.querySelector('.tv-stack'); if (ns) stack.innerHTML = ns.innerHTML; }
+      a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
       return;
     }
     var main = document.getElementById('main');
@@ -744,11 +1189,11 @@
     if (path === 'defaultTeam') S.team = val === 'MLB' ? 'MLB' : parseInt(val, 10);
     if (path === 'layout' && val === 'tv') S.tickPaused = false;
     saveSettings();
-    if (path === 'gameType' && val !== prevGameType && S.data && S.data.source === 'live') {
+    if (path === 'gameType' && val !== prevGameType && isLive()) {
       S.leaders = {};
       API.teamStats(S.data.season, val).then(function (ts) { S.data.teamStats = ts; refreshAll(); }).catch(function () {});
     }
-    if (path === 'refresh') scheduleRefresh();
+    if (path === 'refresh') { scheduleScores(); scheduleDaily(); }
     S.resetArmed = false;
     render();
   }
@@ -757,7 +1202,7 @@
     var act = btn.getAttribute('data-act');
     if (act === 'open-settings') { S.view = 'settings'; S.resetArmed = false; render(); try { window.scrollTo(0, 0); history.replaceState(null, '', '#settings'); } catch (er) { /* ignore */ } }
     else if (act === 'close-settings') { S.view = 'dash'; render(); try { window.scrollTo(0, 0); history.replaceState(null, '', location.pathname + location.search); } catch (er) { /* ignore */ } }
-    else if (act === 'tk-toggle') { S.tickPaused = !S.tickPaused; var v = document.getElementById('tk-view'); if (v) v.classList.toggle('paused', S.tickPaused); btn.setAttribute('aria-label', S.tickPaused ? 'Play ticker' : 'Pause ticker'); btn.innerHTML = S.tickPaused ? '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="#FFFFFF"><polygon points="7 5 19 12 7 19 7 5"></polygon></svg>' : '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round"><line x1="8" y1="5" x2="8" y2="19"></line><line x1="16" y1="5" x2="16" y2="19"></line></svg>'; }
+    else if (act === 'tk-toggle') { S.tickPaused = !S.tickPaused; var v = document.getElementById('tk-view'); if (v) v.classList.toggle('paused', S.tickPaused); btn.setAttribute('aria-label', S.tickPaused ? 'Play ticker' : 'Pause ticker'); btn.innerHTML = S.tickPaused ? PLAY_SVG : PAUSE_SVG; }
     else if (act === 'seg') setSetting(btn.getAttribute('data-key'), btn.getAttribute('data-val'));
     else if (act === 'reset') {
       if (!S.resetArmed) { S.resetArmed = true; render(); return; }
@@ -779,6 +1224,7 @@
   /* ───────── boot ───────── */
   function boot() {
     S.settings = loadSettings();
+    saveSettings();
     S.team = S.settings.defaultTeam === 'MLB' ? 'MLB' : parseInt(S.settings.defaultTeam, 10) || 'MLB';
     try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) S.tickPaused = true; } catch (e) { /* ignore */ }
     if (location.hash === '#settings') S.view = 'settings';
@@ -788,12 +1234,16 @@
     app.addEventListener('focusin', onFocus);
     var tv = function () { if (isTV()) pokeIdle(); };
     document.addEventListener('mousemove', tv); document.addEventListener('keydown', tv);
-    document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible' && isTV()) requestWake(); });
+    document.addEventListener('visibilitychange', function () {
+      if (document.visibilityState !== 'visible') return;
+      if (isTV()) requestWake();
+      if (isLive() && S.settings.refresh && S.nextDailyAt && Date.now() >= S.nextDailyAt) dailyReload();
+    });
     app.addEventListener('mouseover', function (e) { TK.hover = !!e.target.closest('#tk-view'); });
     app.addEventListener('mouseleave', function () { TK.hover = false; });
     render();
     TK.raf = window.requestAnimationFrame(tickStep);
-    loadLive().catch(function (err) { useSnapshot(err); }).then(function () { render(); scheduleRefresh(); });
+    loadLive().catch(function (err) { useSnapshot(err); }).then(function () { render(); scheduleScores(); scheduleDaily(); });
   }
   X.App = { state: S, render: render, boot: boot };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
