@@ -5,6 +5,16 @@
 
   X.API_BASE = 'https://statsapi.mlb.com/api/v1';
 
+  /* Which board to boot: ?league=college|mlb in the address wins, then the saved setting. */
+  X.currentLeague = function () {
+    try {
+      var m = /[?&]league=(mlb|college)\b/.exec(window.location.search);
+      if (m) return m[1];
+      var s = JSON.parse(window.localStorage.getItem('mlb-live-board:settings') || '{}');
+      return s.league === 'college' ? 'college' : 'mlb';
+    } catch (e) { return 'mlb'; }
+  };
+
   /* Divisions in display order. */
   X.DIVISIONS = [
     { id: 201, name: 'AL East', league: 'AL' },
@@ -71,14 +81,14 @@
     { id: 'hitting', label: 'Hitting' },
     { id: 'pitching', label: 'Pitching' },
     { id: 'fielding', label: 'Fielding' },
-    { id: 'catching', label: 'Catching' }
+    { id: 'catching', label: 'Catching' },
+    { id: 'saber', label: 'Sabermetrics' }
   ];
   X.STATS = [
     S('hitting', 'battingAverage', 'AVG', 'Batting average'),
     S('hitting', 'onBasePercentage', 'OBP', 'On-base percentage'),
     S('hitting', 'sluggingPercentage', 'SLG', 'Slugging percentage'),
     S('hitting', 'onBasePlusSlugging', 'OPS', 'On-base plus slugging'),
-    S('hitting', 'war', 'WAR', 'Wins above replacement (position players)'),
     S('hitting', 'homeRuns', 'HR', 'Home runs'),
     S('hitting', 'runsBattedIn', 'RBI', 'Runs batted in'),
     S('hitting', 'runs', 'R', 'Runs scored'),
@@ -109,7 +119,6 @@
 
     S('pitching', 'earnedRunAverage', 'ERA', 'Earned run average'),
     S('pitching', 'walksAndHitsPerInningPitched', 'WHIP', 'Walks + hits per inning'),
-    S('pitching', 'war', 'WAR', 'Wins above replacement (pitchers)'),
     S('pitching', 'strikeouts', 'K', 'Strikeouts (pitching)'),
     S('pitching', 'wins', 'W', 'Wins'),
     S('pitching', 'losses', 'L', 'Losses'),
@@ -173,11 +182,56 @@
     S('catching', 'wildPitch', 'WP', 'Wild pitches while catching'),
     S('catching', 'innings', 'INN', 'Innings caught')
   ];
+
+  /*
+   * Sabermetrics aren't leaderboard categories. They come from GET /stats?stats=sabermetrics
+   * (api.js → saberLeaders), and are listed under their own "Sabermetrics" header in the picker.
+   * fmt: 'r3' = .350, 'i' = whole number, '1' / '2' = decimals. low = smaller is better.
+   * rate = pool + qualification asterisk apply (as for AVG or ERA); counting stats rank everyone.
+   * wLeague (the league-wide wOBA constant) is the same for every player, so it's left out.
+   */
+  function W(group, cat, short, name, fmt, extra) {
+    var s = { key: group + ':' + cat, group: group, cat: cat, short: short, name: name, saber: true, pick: 'saber', fmt: fmt };
+    for (var k in extra || {}) s[k] = extra[k];
+    return s;
+  }
+  X.SABER_STATS = [
+    W('hitting', 'war', 'WAR', 'Wins above replacement (position players)', '1'),
+    W('hitting', 'rar', 'RAR', 'Runs above replacement (position players)', '1'),
+    W('hitting', 'woba', 'wOBA', 'Weighted on-base average', 'r3', { rate: 'bat' }),
+    W('hitting', 'wRcPlus', 'wRC+', 'Weighted runs created, park and league adjusted (100 = average)', 'i', { rate: 'bat' }),
+    W('hitting', 'wRc', 'wRC', 'Weighted runs created', 'i'),
+    W('hitting', 'wRaa', 'wRAA', 'Weighted runs above average', '1'),
+    W('hitting', 'batting', 'BAT', 'Batting runs above average', '1'),
+    W('hitting', 'baseRunning', 'BSR', 'Baserunning runs above average', '1'),
+    W('hitting', 'ubr', 'UBR', 'Ultimate baserunning runs (non-steal)', '1'),
+    W('hitting', 'wSb', 'wSB', 'Weighted stolen-base runs', '1'),
+    W('hitting', 'wGdp', 'wGDP', 'Double-play avoidance runs', '1'),
+    W('hitting', 'spd', 'SPD', 'Speed score (0–10)', '1', { rate: 'bat' }),
+    W('hitting', 'fielding', 'FLD', 'Fielding runs above average', '1'),
+    W('hitting', 'positional', 'POS', 'Positional adjustment runs', '1'),
+    W('hitting', 'replacement', 'REP', 'Replacement-level runs (position players)', '1'),
+    W('pitching', 'war', 'WAR', 'Wins above replacement (pitchers)', '1'),
+    W('pitching', 'ra9War', 'RA9-WAR', 'WAR based on runs allowed', '1'),
+    W('pitching', 'rar', 'RAR', 'Runs above replacement (pitchers)', '1'),
+    W('pitching', 'fip', 'FIP', 'Fielding-independent pitching', '2', { rate: 'pit', low: true }),
+    W('pitching', 'xfip', 'xFIP', 'Expected FIP (league-average home-run rate)', '2', { rate: 'pit', low: true }),
+    W('pitching', 'fipMinus', 'FIP−', 'FIP vs. league, park adjusted (100 = average)', 'i', { rate: 'pit', low: true }),
+    W('pitching', 'eraMinus', 'ERA−', 'ERA vs. league, park adjusted (100 = average)', 'i', { rate: 'pit', low: true }),
+    W('pitching', 'sd', 'SD', 'Shutdowns (relievers)', 'i'),
+    W('pitching', 'md', 'MD', 'Meltdowns (relievers)', 'i'),
+    W('pitching', 'pli', 'pLI', 'Average leverage index', '2', { rate: 'pit' }),
+    W('pitching', 'inli', 'inLI', 'Leverage index entering an inning', '2', { rate: 'pit' }),
+    W('pitching', 'gmli', 'gmLI', 'Leverage index entering the game', '2', { rate: 'pit' }),
+    W('pitching', 'exli', 'exLI', 'Leverage index leaving the game', '2', { rate: 'pit' })
+  ];
   X.STAT_BY_KEY = {};
   X.STATS.forEach(function (s) { X.STAT_BY_KEY[s.key] = s; });
-  /* WAR isn't a leaderboard category; it comes from the API's sabermetrics stats (api.js → saberLeaders). */
-  X.STAT_BY_KEY['hitting:war'].saber = true;
-  X.STAT_BY_KEY['pitching:war'].saber = true;
+  X.SABER_STATS.forEach(function (s) {
+    if (X.STAT_BY_KEY[s.key]) throw new Error('Duplicate stat key ' + s.key);
+    X.STATS.push(s);
+    X.STAT_BY_KEY[s.key] = s;
+  });
 
   /* Rate stats get an asterisk on team pages when the player hasn't qualified yet
      (3.1 plate appearances or 1 inning pitched per team game). */
@@ -311,6 +365,7 @@
 
   X.DEFAULT_SETTINGS = {
     v: 2,
+    league: 'mlb',            // mlb | college (College mode lives in js/college/)
     theme: 'auto',            // auto | light | dark
     layout: 'standard',       // standard | tv
     defaultTeam: 'MLB',

@@ -131,7 +131,7 @@
         S.data = { source: 'live', asOf: new Date().toISOString(), now: null, season: info.year, info: info, phase: phaseFor(info, today),
           standings: r[0], teamStats: r[1], games: r[2], series: API.seriesFromGames(r[2]), race: null,
           windows: API.monthWindows(info.start, end), seasonEnd: end, seasonOver: dayKey(today) > info.end };
-        S.leaders = {}; S.ext = {}; S.pendingExt = {};
+        S.leaders = {}; S.ext = {}; S.pendingExt = {}; API.resetCache();
         loadRace();
       });
     });
@@ -504,6 +504,7 @@
     return '<div class="tk-copy">' + inner + '</div><div class="tk-copy" aria-hidden="true">' + inner + '</div>';
   }
   function refreshTicker() {
+    if (S.stopped) return;
     var tr = document.getElementById('tk-track'), lb = document.getElementById('tk-label');
     if (tr) tr.innerHTML = tickerItemsHTML();
     if (lb) lb.textContent = isMLB() ? 'MLB' : abbr(S.team);
@@ -1064,7 +1065,7 @@
   function statOptions(current, filter, allowHide) {
     var h = allowHide === false ? '' : '<option value="hide"' + (current === 'hide' ? ' selected' : '') + '>Hide this block</option>';
     X.STAT_GROUPS.forEach(function (g) {
-      var list = X.STATS.filter(function (s) { return s.group === g.id && (!filter || filter(s)); });
+      var list = X.STATS.filter(function (s) { return (s.pick || s.group) === g.id && (!filter || filter(s)); });
       if (!list.length) return;
       h += '<optgroup label="' + g.label + '">' + list.map(function (s) {
         return '<option value="' + s.key + '"' + (s.key === current ? ' selected' : '') + '>' + esc(s.short + ' · ' + s.name) + '</option>';
@@ -1112,6 +1113,9 @@
     if (X.TEAM_ONLY_CHARTS[b.race]) sub = '<span class="hint" style="font-size:13px;color:var(--muted)">Shows on team pages. The MLB page shows games above .500 instead.</span>';
     return '<div class="set-top"><div class="set-top-in"><h1>Settings</h1><div class="set-actions"><button type="button" class="btn-hdr" data-act="close-settings">Back to the board</button></div></div></div><div class="hdr-strip"></div>' +
       '<div class="set-wrap">' +
+      '<section class="set-sec" aria-labelledby="sec-league"><div class="card-hd"><h2 id="sec-league">League</h2><span class="sub">Which board to show</span></div><div class="set-body">' +
+      '<div class="field"><span class="flabel">League</span>' + segHTML('league', s.league, [['mlb', 'MLB'], ['college', 'College (D1)']]) + '<span class="hint">College mode covers NCAA Division I baseball: all of D1, each conference, and every D1 team. Display settings carry over.</span></div>' +
+      '</div></section>' +
       '<section class="set-sec" aria-labelledby="sec-display"><div class="card-hd"><h2 id="sec-display">Display</h2><span class="sub">Saved in this browser</span></div><div class="set-body">' +
       '<div class="field"><span class="flabel">Theme</span>' + segHTML('theme', s.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '<span class="hint">Auto follows your device setting.</span></div>' +
       '<div class="field"><span class="flabel">Layout</span>' + segHTML('layout', s.layout, [['standard', 'Standard'], ['tv', 'TV']]) + '<span class="hint">TV fits a 16:9 screen with no scrolling, uses larger type, rotates leader boards and charts, and keeps the screen awake where the browser allows it.</span></div>' +
@@ -1129,7 +1133,7 @@
       (snapshot ? '<div class="field"><span class="flabel">Sample live games</span>' + segHTML('sampleLive', s.sampleLive, [[false, 'Off'], [true, 'On']]) + '<span class="hint">Preview only. The board is showing a saved snapshot, so this adds two made-up in-progress scores to show how live games look in the ticker.</span></div>' : '') +
       '</div></section>' +
       '<section class="set-sec" aria-labelledby="sec-blocks"><div class="card-hd"><h2 id="sec-blocks">Blocks</h2><span class="sub">Choose what each block shows</span></div><div class="set-body">' + map +
-      '<p class="set-note" style="margin:0">Leader boards can show any of the ' + X.STATS.length + ' player leaderboards the MLB Stats API ranks, across hitting, pitching, fielding and catching. Header tiles and the all-clubs chart use club stats. With a team selected, every block switches to that team.</p>' +
+      '<p class="set-note" style="margin:0">Leader boards can show any of the ' + (X.STATS.length - X.SABER_STATS.length) + ' player leaderboards the MLB Stats API ranks, across hitting, pitching, fielding and catching, plus ' + X.SABER_STATS.length + ' sabermetrics such as WAR, wOBA, wRC+ and FIP. Header tiles and the all-clubs chart use club stats. With a team selected, every block switches to that team.</p>' +
       '<h3 class="sec-title" style="font-size:22px">Header tiles</h3><div class="pickers">' +
       X.BLOCKS.tiles.map(function (k) { return pickerHTML(k.code, k.id, k.label, metricOptions(b[k.id], true, false)); }).join('') + '</div>' +
       '<h3 class="sec-title" style="font-size:22px">Charts and lists</h3><div class="pickers">' +
@@ -1147,6 +1151,7 @@
 
   /* ───────── render ───────── */
   function render() {
+    if (S.stopped) return;
     applyChrome();
     var app = document.getElementById('app');
     var focusId = document.activeElement && document.activeElement.id;
@@ -1158,6 +1163,7 @@
     startTV();
   }
   function refreshMain() {
+    if (S.stopped) return;
     if (S.view !== 'dash') return;
     if (isTV()) {
       var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
@@ -1169,6 +1175,7 @@
     if (main) main.innerHTML = dashMainHTML(); else render();
   }
   function refreshStatus() {
+    if (S.stopped) return;
     var st = document.getElementById('hdr-status'); if (st) st.innerHTML = statusHTML();
     var tl = document.getElementById('tiles'); if (tl) tl.innerHTML = tilesHTML();
   }
@@ -1185,6 +1192,13 @@
     if (raw === 'true') val = true; else if (raw === 'false') val = false;
     else if (/^\d+$/.test(raw) && ['limit', 'tvRotate'].indexOf(path) >= 0) val = parseInt(raw, 10);
     var prevGameType = S.settings.gameType;
+    if (path === 'league') {
+      if (val === 'college') {
+        S.settings.league = 'college'; saveSettings();
+        X.switchLeague('college');
+      }
+      return;
+    }
     if (path.indexOf('blocks.') === 0) S.settings.blocks[path.slice(7)] = val; else S.settings[path] = val;
     if (path === 'defaultTeam') S.team = val === 'MLB' ? 'MLB' : parseInt(val, 10);
     if (path === 'layout' && val === 'tv') S.tickPaused = false;
@@ -1222,29 +1236,54 @@
   }
 
   /* ───────── boot ───────── */
-  function boot() {
+  function stop() {
+    S.stopped = true;
+    clearTimeout(S.timers.sched); clearTimeout(S.timers.daily); clearInterval(S.tv.timer);
+    if (TK.raf) window.cancelAnimationFrame(TK.raf);
+    releaseWake();
+  }
+  var docBound = false;
+  function boot(opts) {
+    S.stopped = false;
     S.settings = loadSettings();
+    S.settings.league = 'mlb';
     saveSettings();
     S.team = S.settings.defaultTeam === 'MLB' ? 'MLB' : parseInt(S.settings.defaultTeam, 10) || 'MLB';
     try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) S.tickPaused = true; } catch (e) { /* ignore */ }
-    if (location.hash === '#settings') S.view = 'settings';
+    if (location.hash === '#settings' || (opts && opts.view === 'settings')) S.view = 'settings';
     var app = document.getElementById('app');
     app.addEventListener('click', onClick);
     app.addEventListener('change', onChange);
     app.addEventListener('focusin', onFocus);
-    var tv = function () { if (isTV()) pokeIdle(); };
-    document.addEventListener('mousemove', tv); document.addEventListener('keydown', tv);
-    document.addEventListener('visibilitychange', function () {
-      if (document.visibilityState !== 'visible') return;
-      if (isTV()) requestWake();
-      if (isLive() && S.settings.refresh && S.nextDailyAt && Date.now() >= S.nextDailyAt) dailyReload();
-    });
+    var tv = function () { if (!S.stopped && isTV()) pokeIdle(); };
+    if (!docBound) {
+      docBound = true;
+      document.addEventListener('mousemove', tv); document.addEventListener('keydown', tv);
+      document.addEventListener('visibilitychange', onVisible);
+    }
     app.addEventListener('mouseover', function (e) { TK.hover = !!e.target.closest('#tk-view'); });
     app.addEventListener('mouseleave', function () { TK.hover = false; });
     render();
     TK.raf = window.requestAnimationFrame(tickStep);
-    loadLive().catch(function (err) { useSnapshot(err); }).then(function () { render(); scheduleScores(); scheduleDaily(); });
+    loadLive().catch(function (err) { useSnapshot(err); }).then(function () { if (S.stopped) return; render(); scheduleScores(); scheduleDaily(); });
   }
-  X.App = { state: S, render: render, boot: boot };
-  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  function onVisible() {
+      if (S.stopped || document.visibilityState !== 'visible') return;
+      if (isTV()) requestWake();
+      if (isLive() && S.settings.refresh && S.nextDailyAt && Date.now() >= S.nextDailyAt) dailyReload();
+  }
+  X.App = { state: S, render: render, boot: boot, stop: stop };
+  /* Switch boards in place: stop the running one, swap in a fresh #app (dropping its listeners), boot the other. */
+  X.switchLeague = function (to) {
+    var from = to === 'college' ? X.App : X.CollegeApp, next = to === 'college' ? X.CollegeApp : X.App;
+    if (!next) return;
+    if (from && from.stop) from.stop();
+    var old = document.getElementById('app'), fresh = old.cloneNode(false);
+    old.parentNode.replaceChild(fresh, old);
+    try { window.scrollTo(0, 0); history.replaceState(null, '', location.pathname + location.search.replace(/([?&])league=[^&]*&?/, '$1').replace(/[?&]$/, '') + '#settings'); } catch (e) { /* ignore */ }
+    next.boot({ view: 'settings' });
+  };
+  if (!X.currentLeague || X.currentLeague() !== 'college') {
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
+  }
 })();

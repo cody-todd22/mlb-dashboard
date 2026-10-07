@@ -70,7 +70,7 @@
       if (s.hi && !s.noDots && n <= 14) {
         s.vals.forEach(function (v, i) {
           if (v == null || !isFinite(v)) return;
-          out.push('<circle class="pt' + (s.dash ? ' dash' : '') + '" cx="' + x(i).toFixed(1) + '" cy="' + y(v).toFixed(1) + '" r="4.5"><title>' + esc(s.label + ' · ' + (opts.labels[i] || '') + ': ' + fmt(v)) + '</title></circle>');
+          out.push('<circle class="pt' + (s.dash ? ' dash' : '') + '" cx="' + x(i).toFixed(1) + '" cy="' + y(v).toFixed(1) + '" r="4.5"><title>' + esc(s.label + ' · ' + ((opts.tipLabels || opts.labels)[i] || '') + ': ' + fmt(v)) + '</title></circle>');
         });
       }
       if (last) ends.push({ text: (s.endLabel || s.label) + ' ' + fmt(last.v), y: y(last.v), hi: s.hi, ref: s.ref });
@@ -134,8 +134,8 @@
         '<div class="col-half">' + (it.diff < 0 ? '<div class="col-bar" style="height:' + h + '"></div>' + lab : '') + '</div></div>';
     }).join('');
     var labs = items.map(function (it) { return '<span class="' + (it.on ? 'on' : '') + '">' + esc(it.abbr) + '</span>'; }).join('');
-    return '<div class="clubs-in"><div class="cols" role="img" aria-label="' + esc(opts.label + ' for all 30 clubs, compared with the MLB average') + '">' +
-      '<div class="mid"><span>MLB avg ' + esc(opts.avgText) + '</span></div>' + cols + '</div><div class="col-labs">' + labs + '</div></div>';
+    return '<div class="clubs-in"><div class="cols" role="img" aria-label="' + esc(opts.label + ' for ' + (opts.scopeName || 'all 30 clubs') + ', compared with the average') + '">' +
+      '<div class="mid"><span>' + esc(opts.avgName || 'MLB avg') + ' ' + esc(opts.avgText) + '</span></div>' + cols + '</div><div class="col-labs">' + labs + '</div></div>';
   };
 
   /* Share of the #1 value for leader bars; detects boards ranked low-to-high (ERA, WHIP…). */

@@ -138,24 +138,41 @@
 
   /* One leaderboard → [{ rank, name, pid, teamId, value }]. One category per request:
    * the endpoint falls back to default categories when a batch mixes stat groups. */
-  /* WAR leaders from /stats?stats=sabermetrics. Sorted here too: with a teamId filter the API
-   * doesn't fully sort by WAR. Ranks and ties follow the one-decimal value people see. */
-  function warText(v) { return (Math.round(v * 10) / 10).toFixed(1); }
-  API.saberLeaders = function (season, group, opts) {
-    var p = { stats: 'sabermetrics', group: group, season: season, sportId: 1, playerPool: 'ALL', sortStat: 'war', order: 'desc',
-      limit: opts.teamId ? 100 : 60, gameType: opts.gameType || 'R' };
-    if (opts.teamId) p.teamId = opts.teamId;
-    return API.get('/stats', p).then(function (j) {
-      var rows = (((j.stats || [])[0] || {}).splits || []).map(function (sp) {
-        var war = num(sp.stat && sp.stat.war);
-        return { name: (sp.player && sp.player.fullName) || '—', pid: sp.player && sp.player.id, teamId: sp.team && sp.team.id, war: war };
-      }).filter(function (r) { return r.war !== null; });
-      rows.sort(function (a, b) { return b.war - a.war; });
+  /* Sabermetrics (WAR, wOBA, wRC+, FIP, …) come from /stats?stats=sabermetrics, one response per
+   * stat group carrying every metric for every player. The full list is fetched once per
+   * group / pool / team / game type, cached until the daily reload, and ranked here:
+   * the server's ascending sort is unreliable and its teamId results aren't fully sorted.
+   * Ranks and ties follow the value people see on the board. */
+  var saberCache = {};
+  API.resetCache = function () { saberCache = {}; };
+  API.saberSet = function (season, group, pool, teamId, gameType) {
+    var key = [season, group, pool, teamId || '', gameType].join('|');
+    if (!saberCache[key]) {
+      var p = { stats: 'sabermetrics', group: group, season: season, sportId: 1, playerPool: pool, sortStat: 'war', order: 'desc', limit: 2000, gameType: gameType };
+      if (teamId) p.teamId = teamId;
+      saberCache[key] = API.get('/stats', p).then(function (j) {
+        return (((j.stats || [])[0] || {}).splits || []).map(function (sp) {
+          return { name: (sp.player && sp.player.fullName) || '—', pid: sp.player && sp.player.id, teamId: sp.team && sp.team.id, stat: sp.stat || {} };
+        }).filter(function (r) { return r.pid; });
+      }, function (err) { delete saberCache[key]; throw err; });
+    }
+    return saberCache[key];
+  };
+  API.saberText = function (v, fmt) {
+    if (fmt === 'i') return String(Math.round(v));
+    if (fmt === 'r3') { var t = v.toFixed(3); return Math.abs(v) < 1 ? t.replace(/^(-?)0\./, '$1.') : t; }
+    return v.toFixed(fmt === '2' ? 2 : 1);
+  };
+  API.saberLeaders = function (season, s, opts) {
+    var pool = s.rate ? (opts.pool || 'ALL') : 'ALL';
+    return API.saberSet(season, s.group, pool, opts.teamId, opts.gameType || 'R').then(function (list) {
+      var rows = list.map(function (r) { return { r: r, v: num(r.stat[s.cat]) }; }).filter(function (x) { return x.v !== null; });
+      rows.sort(function (a, b) { return s.low ? a.v - b.v : b.v - a.v; });
       var lastText = null, lastRank = 0;
-      return rows.slice(0, opts.limit).map(function (r, i) {
-        var text = warText(r.war);
+      return rows.slice(0, opts.limit).map(function (x, i) {
+        var text = API.saberText(x.v, s.fmt);
         if (text !== lastText) { lastRank = i + 1; lastText = text; }
-        return { rank: lastRank, name: r.name, pid: r.pid, teamId: r.teamId, value: text };
+        return { rank: lastRank, name: x.r.name, pid: x.r.pid, teamId: x.r.teamId, value: text };
       });
     });
   };
@@ -163,7 +180,7 @@
   API.leaders = function (season, statKey, opts) {
     var s = X.STAT_BY_KEY[statKey];
     if (!s) return Promise.resolve([]);
-    if (s.saber) return API.saberLeaders(season, s.group, opts);
+    if (s.saber) return API.saberLeaders(season, s, opts);
     var p = { leaderCategories: s.cat, statGroup: s.group, season: season, sportId: 1, limit: opts.limit, leaderGameTypes: opts.gameType, playerPool: opts.pool };
     if (opts.teamId) p.teamId = opts.teamId;
     return API.get('/stats/leaders', p).then(function (j) {
