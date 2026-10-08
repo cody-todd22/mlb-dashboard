@@ -586,6 +586,7 @@
       tr.style.transform = 'translateX(' + TK.x.toFixed(1) + 'px)';
     }
     TK.raf = window.requestAnimationFrame(tickStep);
+    try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!S.stopped && isTV()) CH.fitTV(document.getElementById('app')); }); } catch (e) { /* ignore */ }
   }
 
   /* ───────── feature chart (block R) ───────── */
@@ -769,7 +770,7 @@
     if (isD1()) {
       var rk = d.rankings;
       if (!rk || !rk.rows.length) return { title: 'Top 25', body: isLive() ? msgNoData('the Top 25') : msgSnapshot() };
-      var rows = rk.rows.slice(0, tv ? 12 : 25).map(function (r) {
+      var rows = rk.rows.slice(0, tv ? 8 : 25).map(function (r) {
         var prev = parseInt(r.prev, 10), mv = isNaN(prev) ? 'New' : (prev === r.rank ? '—' : (prev > r.rank ? '▲' + (prev - r.rank) : '▼' + (r.rank - prev)));
         var t = team(r.seo);
         return '<div class="st-row rk-row"><span class="st-rk">' + r.rank + '</span><span class="st-name"><i style="background:' + (t ? t.primary : '#888') + '"></i>' + esc(t ? t.school : r.name) + '</span><span>' + esc(r.record) + '</span><span class="st-mv">' + esc(mv) + '</span></div>';
@@ -777,6 +778,11 @@
       return { title: rk.title.replace(/\.com/, ''), sub: rk.updated, body: '<div class="st-scroll"><div class="st-row rk-row head"><span>#</span><span>Team</span><span>W–L</span><span>Move</span></div>' + rows + '</div>' };
     }
     var cid = scopeConf(), cs = confStandings(cid), noConf = d.partial || !d.recs;
+    if (tv && cs.length > 8) {   // the TV stack shows the top eight, plus the selected team if it's lower
+      var mine = cs.filter(function (r) { return r.seo === scopeTeam(); })[0], top = cs.slice(0, 8);
+      if (mine && top.indexOf(mine) < 0) top = cs.slice(0, 7).concat([mine]);
+      cs = top;
+    }
     var list = cs.map(function (r) { return stRow(r.seo, [r.cw != null && (r.cw + r.cl) ? wl(r.cw, r.cl) : '—', wl(r.w, r.l, r.t)], r.seo === scopeTeam()); });
     var head = '<div class="st-row cs head"><span>Team</span><span>Conf</span><span>Overall</span></div>';
     var note = noConf ? '<div class="lb-note">' + (d.partial ? 'Conference records are available with live data. Sorted by overall record.' : 'Conference records appear once the season’s results finish loading.') + '</div>' : '';
@@ -941,6 +947,7 @@
     var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
     if (a) a.innerHTML = tvBoardPanelHTML();
     if (c && S.tv.board % 2 === 0) c.innerHTML = tvChartPanelHTML();
+    CH.fitTV(document.getElementById('app'));
   }
   function startTV() { clearInterval(S.tv.timer); if (!isTV()) { releaseWake(); return; } S.tv.timer = setInterval(tvTick, Math.max(5, S.settings.tvRotate) * 1000); requestWake(); }
   function requestWake() {
@@ -1052,6 +1059,7 @@
     else if (isTV()) app.innerHTML = '<div class="tvapp">' + headerHTML() + tvMainHTML() + '</div>';
     else app.innerHTML = headerHTML() + '<main class="dash" id="main">' + dashMainHTML() + '</main>';
     if (focusId) { var el = document.getElementById(focusId); if (el) el.focus(); }
+    if (isTV()) CH.fitTV(app);
     startTV();
   }
   function refreshMain() {
@@ -1061,6 +1069,7 @@
       var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
       if (!a || !c) { render(); return; }
       a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
+      CH.fitTV(document.getElementById('app'));
       return;
     }
     var main = document.getElementById('main'); if (main) main.innerHTML = dashMainHTML(); else render();
@@ -1155,6 +1164,7 @@
       docBound = true;
       var tv = function () { if (!S.stopped && isTV()) pokeIdle(); };
       document.addEventListener('mousemove', tv); document.addEventListener('keydown', tv);
+      window.addEventListener('resize', function () { if (!S.stopped && isTV()) { clearTimeout(S.timers.fit); S.timers.fit = setTimeout(function () { render(); }, 150); } });
       document.addEventListener('visibilitychange', onVisible);
     }
     app.addEventListener('mouseover', function (e) { TK.hover = !!e.target.closest('#tk-view'); });

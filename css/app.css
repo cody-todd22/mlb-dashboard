@@ -271,15 +271,20 @@ button, select, input { font: inherit; color: inherit; }
 }
 
 /* ───────── TV layout (16:9 wall display, no scrolling) ───────── */
-html.tv { font-size: clamp(14px, 1.05vw, 34px); height: 100%; }
-html.tv body { height: 100%; overflow: hidden; }
-.tvapp { height: 100%; display: flex; flex-direction: column; }
+/* Type scales with the screen: width on 16:9, height on taller or shorter screens, so the board always fits. */
+html.tv { font-size: clamp(11px, min(1.05vw, 1.85vh), 40px); height: 100%; }
+html.tv body { height: 100vh; height: 100dvh; overflow: hidden; }
+html.tv #app { height: 100%; }
+.tvapp { height: 100%; display: flex; flex-direction: column; overflow: hidden; }
+.tv .hdr { flex: none; }
 .tv .hdr-in { max-width: none; padding: 1rem 1.6rem 0.9rem; gap: 0.8rem; }
 .tv .hdr-main { display: flex; align-items: flex-end; justify-content: space-between; gap: 1.6rem; }
+.tv .hdr-main .hdr-title { flex: 1 1 auto; min-width: 0; }
 .tv .hdr-title { font-size: 3.6rem; }
 .tv .ctx, .tv .pill { font-size: 1.05rem; }
-.tv .tiles { flex-wrap: nowrap; gap: 0.5rem; }
-.tv .tile { flex: 0 1 12rem; padding: 0.5rem 0.9rem; }
+.tv .tiles { flex: none; flex-wrap: nowrap; gap: 0.5rem; }
+.tv .tile { flex: 0 0 auto; min-width: 9.5rem; padding: 0.5rem 0.9rem; }
+.tv .tile-v, .tv .tile-k, .tv .tile-s { white-space: nowrap; }
 .tv .tile-k { font-size: 0.8rem; }
 .tv .tile-v { font-size: 1.9rem; }
 .tv .tile-s { font-size: 0.9rem; }
@@ -289,21 +294,23 @@ html.tv body { height: 100%; overflow: hidden; }
 .tv .tk-sub, .tv .tk-when, .tv .tk-live { font-size: 1.05rem; }
 .tv .tk-label, .tv .tk-item.head { font-size: 1.15rem; }
 .tv .pip { width: 0.7rem; height: 0.7rem; }
-.tv-main { flex: 1; min-height: 0; display: grid; grid-template-columns: 1.35fr 1.2fr 1fr; gap: 1.1rem; padding: 1.1rem 1.6rem 1.2rem; }
-.tv-panel { min-height: 0; display: flex; flex-direction: column; background: var(--surface); box-shadow: 0 2px 0 var(--shadow); }
+.tv-main { flex: 1 1 0; min-height: 0; display: grid; grid-template-columns: minmax(0, 1.35fr) minmax(0, 1.2fr) minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); gap: 1.1rem; padding: 1.1rem 1.6rem 1.2rem; overflow: hidden; }
+.tv-panel { min-height: 0; min-width: 0; overflow: hidden; display: flex; flex-direction: column; background: var(--surface); box-shadow: 0 2px 0 var(--shadow); }
+.tv-panel > .card-hd, .tv-progress { flex: none; }
 .tv-panel .card-hd { padding: 0.6rem 1rem; }
 .tv-panel .card-hd h2 { font-size: 1.7rem; }
 .tv-panel .card-hd .sub { font-size: 0.9rem; }
 .tv-fill { flex: 1; min-height: 0; display: flex; flex-direction: column; justify-content: center; padding: 0.8rem 1rem; }
-.tv-fill .chart-svg { height: 100%; width: 100%; }
+.tv-fill > .chart-svg { flex: 1 1 0; min-height: 0; height: auto; width: 100%; }
+.tv-fill > .legend, .tv-fill > .empty, .tv-fill > .loading { flex: none; }
 .tv-fill .clubs-in { min-width: 0; padding: 0; height: 100%; display: flex; flex-direction: column; }
 .tv-fill .cols { height: auto; flex: 1; }
 .tv-fill .col-labs span { font-size: 0.72rem; }
 .tv-progress { display: flex; gap: 0.35rem; padding: 0 1rem 0.8rem; }
 .tv-progress i { flex: 1; height: 0.3rem; background: var(--track); }
 .tv-progress i.on { background: var(--team-ink); }
-.tv .lb { flex: 1; justify-content: space-evenly; gap: 0.35rem; padding: 0.8rem; }
-.tv .lrow { height: auto; flex: 1; max-height: 4.6rem; }
+.tv .lb { flex: 1 1 0; min-height: 0; justify-content: flex-start; gap: 0.5rem; padding: 0.8rem; }
+.tv .lrow { height: auto; flex: 0 1 4.4rem; min-height: 2.6rem; }
 .tv .lrank { width: 3.6rem; font-size: 1.6rem; }
 .tv .lname b, .tv .lrow.top .lname b { font-size: 1.6rem; }
 .tv .lname em { font-size: 1.05rem; }
@@ -312,13 +319,18 @@ html.tv body { height: 100%; overflow: hidden; }
 .tv .dual { flex-direction: column; flex-wrap: nowrap; height: 100%; }
 .tv .dual > div { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 .tv .dual .chart-svg { flex: 1; min-height: 0; }
-.tv-stack { min-height: 0; display: flex; flex-direction: column; gap: 1.1rem; }
+.tv-stack { min-height: 0; min-width: 0; display: flex; flex-direction: column; gap: 1.1rem; overflow: hidden; }
 .tv-stack > .tv-panel { flex: 1; min-height: 0; overflow: hidden; }
-.tv-stack > .tv-panel:first-child { flex: none; }
-.tv .st-row { font-size: 1.35rem; padding: 0.45rem 1rem; grid-template-columns: minmax(0, 1fr) 5.4rem 3.6rem; }
+.tv-stack > .tv-panel:first-child { flex: 0 0 auto; max-height: 56%; }
+.tv-stack > .tv-panel:last-child { flex: 1 1 0; min-height: 0; }
+.tv-stack > .tv-panel:only-child { max-height: none; }
+.tv .st-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+.tv .st-name i { display: inline-block; vertical-align: 0.12em; margin-right: 0.5rem; }
+.tv-stack .lb-note { display: none; }
+.tv .st-row { font-size: 1.2rem; padding: 0.3rem 1rem; grid-template-columns: minmax(0, 1fr) 5.4rem 3.6rem; }
 .tv .st-row.head { font-size: 0.85rem; }
 .tv-games { flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.tv-game { flex: 1; display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: center; gap: 0.8rem; padding: 0.3rem 1rem; border-top: 1px solid var(--line); }
+.tv-game { flex: 1 1 0; min-height: 3.3rem; max-height: 6rem; display: grid; grid-template-columns: 6.5rem minmax(0, 1fr); align-items: center; gap: 0.8rem; padding: 0.3rem 1rem; border-top: 1px solid var(--line); }
 .tv-game .when { font-family: var(--font-display); font-weight: 700; font-size: 1rem; text-transform: uppercase; color: var(--muted); line-height: 1.15; }
 .tv-game .when b { display: block; color: var(--team-ink); font-size: 1.1rem; }
 .tv-game .m { font-family: var(--font-display); font-weight: 800; font-style: italic; font-size: 1.7rem; text-transform: uppercase; line-height: 1; }
@@ -345,3 +357,4 @@ html.tv.idle, html.tv.idle * { cursor: none; }
 .tv .st-scroll { max-height: none; overflow: hidden; }
 .tv .st-row.cs { grid-template-columns: minmax(0, 1fr) 4.6rem 5.6rem; }
 .tv .st-row.rk-row { grid-template-columns: 2.2rem minmax(0, 1fr) 4.8rem 3.4rem; }
+.tv-panel [hidden] { display: none !important; }

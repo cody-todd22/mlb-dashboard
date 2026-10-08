@@ -150,6 +150,25 @@
     });
   };
 
+  /* TV layout: hide trailing rows (games, standings, leaders) that don't fit their panel, so nothing is cut in half. */
+  C.fitTV = function (root) {
+    if (!root || !document.documentElement.classList.contains('tv')) return;
+    root.querySelectorAll('.tv-panel').forEach(function (panel) {
+      var lists = [];
+      panel.querySelectorAll('.tv-games, .lb, .st-scroll').forEach(function (l) { lists.push([].slice.call(l.children).filter(function (c) { return !c.classList.contains('head'); })); });
+      var direct = [].slice.call(panel.children).filter(function (c) { return c.classList.contains('st-row') && !c.classList.contains('head'); });
+      if (direct.length) lists.push(direct);
+      lists.forEach(function (items) { items.forEach(function (c) { c.hidden = false; }); });   // measure with everything showing
+      var limit = panel.getBoundingClientRect().bottom - 2;
+      lists.forEach(function (items) {
+        for (var i = items.length - 1; i > 0; i--) {
+          if (items[i].getBoundingClientRect().bottom <= limit) break;
+          items[i].hidden = true;
+        }
+      });
+    });
+  };
+
   C.rate3 = rate3;
   C.signed = signed;
   C.esc = esc;

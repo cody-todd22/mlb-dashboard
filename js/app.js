@@ -522,6 +522,7 @@
       tr.style.transform = 'translateX(' + TK.x.toFixed(1) + 'px)';
     }
     TK.raf = window.requestAnimationFrame(tickStep);
+    try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!S.stopped && isTV()) CH.fitTV(document.getElementById('app')); }); } catch (e) { /* ignore */ }
   }
 
   /* ───────── feature chart (block R) ───────── */
@@ -871,7 +872,7 @@
     var d = S.data, rows, title, col;
     if (isMLB()) {
       title = 'Best records'; col = 'PCT';
-      rows = topRecords(tv ? 8 : 6).map(function (id) { var r = d.standings[id]; return { id: id, wl: r.w + '–' + r.l, ex: rate3(r.pct) }; });
+      rows = topRecords(6).map(function (id) { var r = d.standings[id]; return { id: id, wl: r.w + '–' + r.l, ex: rate3(r.pct) }; });
     } else {
       var div = team(S.team).div; title = X.DIV_BY_ID[div].name; col = 'GB';
       rows = divTeams(div).filter(function (id) { return d.standings[id]; }).sort(function (a, b) { return d.standings[b].pct - d.standings[a].pct; })
@@ -1036,6 +1037,7 @@
     var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
     if (a) a.innerHTML = tvBoardPanelHTML();
     if (c && S.tv.board % 2 === 0) c.innerHTML = tvChartPanelHTML();
+    CH.fitTV(document.getElementById('app'));
   }
   function startTV() {
     clearInterval(S.tv.timer);
@@ -1159,6 +1161,7 @@
     else if (isTV()) app.innerHTML = '<div class="tvapp">' + headerHTML() + tvMainHTML() + '</div>';
     else app.innerHTML = headerHTML() + '<main class="dash" id="main">' + dashMainHTML() + '</main>';
     if (focusId) { var el = document.getElementById(focusId); if (el) el.focus(); }
+    if (isTV()) CH.fitTV(app);
     ensureLeaders();
     startTV();
   }
@@ -1169,6 +1172,7 @@
       var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
       if (!a || !c) { render(); return; }
       a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
+      CH.fitTV(document.getElementById('app'));
       return;
     }
     var main = document.getElementById('main');
@@ -1259,6 +1263,7 @@
     if (!docBound) {
       docBound = true;
       document.addEventListener('mousemove', tv); document.addEventListener('keydown', tv);
+      window.addEventListener('resize', function () { if (!S.stopped && isTV()) { clearTimeout(S.timers.fit); S.timers.fit = setTimeout(function () { render(); }, 150); } });
       document.addEventListener('visibilitychange', onVisible);
     }
     app.addEventListener('mouseover', function (e) { TK.hover = !!e.target.closest('#tk-view'); });
