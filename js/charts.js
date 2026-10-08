@@ -138,16 +138,73 @@
       '<div class="mid"><span>' + esc(opts.avgName || 'MLB avg') + ' ' + esc(opts.avgText) + '</span></div>' + cols + '</div><div class="col-labs">' + labs + '</div></div>';
   };
 
-  /* Share of the #1 value for leader bars; detects boards ranked low-to-high (ERA, WHIP…). */
+  /* Leader values arrive as display strings: ".311", "1.033", "3,412", "205.1", "-1.2", "-.--". */
+  function statNum(v) {
+    var t = String(v == null ? '' : v).replace(/,/g, '').replace(/[^\d.\-+eE]/g, '').trim();
+    if (!t || !/\d/.test(t)) return NaN;
+    var n = parseFloat(t);
+    return isFinite(n) ? n : NaN;
+  }
+  C.statNum = statNum;
+  /* Which way a board is ranked: most steps between neighbouring values decide (a single odd row can't flip it). */
+  function ascending(vals) {
+    var up = 0, down = 0, prev = null;
+    vals.forEach(function (v) { if (!isFinite(v)) return; if (prev != null) { if (v > prev) up++; else if (v < prev) down++; } prev = v; });
+    return up > down;
+  }
+  /* Rows in true rank order. If a feed ever lists rows out of order, they are re-sorted by value and
+     re-ranked (equal values share a rank), so rank, value and bar always agree. */
+  C.orderRows = function (rows) {
+    var vals = rows.map(function (r) { return statNum(r.value); }), asc = ascending(vals), ok = true;
+    var seenBlank = false;
+    for (var i = 0; i < vals.length; i++) {
+      if (!isFinite(vals[i])) { seenBlank = true; continue; }
+      if (seenBlank) { ok = false; break; }   // a blank value ("-.--") sorts to the bottom
+      if (i > 0 && (asc ? vals[i] < vals[i - 1] : vals[i] > vals[i - 1])) { ok = false; break; }
+    }
+    if (ok) return rows;
+    var idx = rows.map(function (r, i) { return i; }).sort(function (a, b) {
+      var va = vals[a], vb = vals[b];
+      if (!isFinite(va) && !isFinite(vb)) return a - b;
+      if (!isFinite(va)) return 1; if (!isFinite(vb)) return -1;
+      return (asc ? va - vb : vb - va) || a - b;
+    });
+    var out = [], firstRank = rows[0] && rows[0].rank != null ? rows[0].rank : 1, lastVal = null, lastRank = firstRank;
+    idx.forEach(function (j, k) {
+      var r = {}; for (var key in rows[j]) r[key] = rows[j][key];
+      if (k > 0 && String(r.value) !== lastVal) lastRank = firstRank + k;
+      r.rank = lastRank; lastVal = String(r.value);
+      out.push(r);
+    });
+    return out;
+  };
+  /*
+   * Bar length for each leader row, 0.06–1. Higher-is-better boards: share of the #1 value.
+   * Lower-is-better boards (ERA, WHIP…): #1 value ÷ this value. Boards with zero or negative
+   * values (a 0.00 ERA, negative WAR or run values) use the spread between the best and worst row.
+   * Bars never grow down the list: equal values get equal bars, and a worse value is always at least 2% shorter.
+   */
   C.shares = function (rows) {
-    var vals = rows.map(function (r) { return parseFloat(r.value); });
-    var first = vals[0], lastV = vals[vals.length - 1];
-    var asc = vals.length > 1 && first < lastV;
-    return vals.map(function (v) {
-      if (!isFinite(v) || !isFinite(first) || v === 0 || first === 0) return 0.06;
-      var p = asc ? first / v : v / first;
+    var vals = rows.map(function (r) { return statNum(r.value); });
+    var fin = vals.filter(function (v) { return isFinite(v); });
+    if (!fin.length) return vals.map(function () { return 0.06; });
+    var asc = ascending(vals), best = asc ? Math.min.apply(null, fin) : Math.max.apply(null, fin), worst = asc ? Math.max.apply(null, fin) : Math.min.apply(null, fin);
+    var ratio = asc ? best > 0 : worst >= 0 && best > 0;
+    var out = vals.map(function (v) {
+      if (!isFinite(v)) return 0.06;
+      var p;
+      if (ratio) p = asc ? best / v : v / best;
+      else p = best === worst ? 1 : 0.06 + 0.94 * (asc ? (worst - v) : (v - worst)) / Math.abs(best - worst);
       return Math.max(0.06, Math.min(1, p));
     });
+    var prev = -1;
+    for (var i = 0; i < out.length; i++) {
+      if (!isFinite(vals[i])) continue;
+      /* a worse value always gets a visibly shorter bar (at least 2% of the width), so close races still read in order */
+      if (prev >= 0) { if (vals[i] === vals[prev]) out[i] = out[prev]; else out[i] = Math.max(0.06, Math.min(out[i], out[prev] - 0.02)); }
+      prev = i;
+    }
+    return out;
   };
 
   /* TV layout: hide trailing rows (games, standings, leaders) that don't fit their panel, so nothing is cut in half. */

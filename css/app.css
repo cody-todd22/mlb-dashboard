@@ -156,13 +156,18 @@ button, select, input { font: inherit; color: inherit; }
 .feat { display: flex; flex-wrap: wrap; gap: 18px; }
 .feat > .card { flex: 1 1 420px; }
 .lb { --slant: 14px; display: flex; flex-direction: column; gap: 4px; padding: 10px; }
-.lrow { display: flex; align-items: stretch; height: 46px; background: var(--surface-2); }
+/* No track behind the bar: the bar is the only shaded shape in the row, so its length is the only thing to compare. */
+.lrow { display: flex; align-items: stretch; height: 46px; background: transparent; }
 .lrow.top { height: 58px; }
-.lrank { width: 56px; flex: none; display: flex; align-items: center; justify-content: center; padding-right: 6px; background: var(--team); color: #FFFFFF; font-family: var(--font-display); font-weight: 800; font-style: italic; font-size: 21px; clip-path: polygon(0 0, 100% 0, 84% 100%, 0 100%); }
+/* Every bar is measured on the #1 row's scale: rows with a smaller rank square start earlier, so they add the difference back. */
+.lrow { --rk-off: 12px; }
+.lrow.top, .tv .lrow { --rk-off: 0px; }
+/* The rank block is a square as tall as its row, butting straight against the name bar. */
+.lrank { height: 100%; width: auto; aspect-ratio: 1 / 1; flex: none; display: flex; align-items: center; justify-content: center; background: var(--team); color: #FFFFFF; font-family: var(--font-display); font-weight: 800; font-style: italic; font-size: 21px; }
 .lname { flex: 1; min-width: 0; position: relative; display: flex; align-items: center; gap: 10px; padding: 0 12px; }
 /* the bar's right edge leans like the value block's left edge, so the leader's bar meets it flush */
-.lbar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--team-ink); opacity: 0.14; clip-path: polygon(0 0, 100% 0, calc(100% - var(--slant)) 100%, 0 100%); }
-.lrow.top .lbar { opacity: 0.24; }
+.lbar { position: absolute; left: 0; top: 0; bottom: 0; background: var(--team-ink); opacity: 0.2; clip-path: polygon(0 0, 100% 0, calc(100% - var(--slant)) 100%, 0 100%); }
+.lrow.top .lbar { opacity: 0.3; }
 .lname b { position: relative; font-family: var(--font-display); font-weight: 700; font-size: 18px; text-transform: uppercase; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .lrow.top .lname b { font-size: 21px; }
 .lname em { position: relative; font-style: normal; font-family: var(--font-display); font-weight: 600; font-size: 14px; color: var(--ink-2); }
@@ -224,7 +229,6 @@ button, select, input { font: inherit; color: inherit; }
   .boards { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
   .select-wrap select { width: 220px; }
   .lval { width: 76px; }
-  .lrank { width: 44px; }
   .tile-v { font-size: 24px; }
   .tile { flex-basis: 140px; padding: 8px 12px; }
   .tile-s { font-size: 13px; }
@@ -311,7 +315,7 @@ html.tv #app { height: 100%; }
 .tv-progress i.on { background: var(--team-ink); }
 .tv .lb { flex: 1 1 0; min-height: 0; justify-content: flex-start; gap: 0.5rem; padding: 0.8rem; }
 .tv .lrow { height: auto; flex: 0 1 4.4rem; min-height: 2.6rem; }
-.tv .lrank { width: 3.6rem; font-size: 1.6rem; }
+.tv .lrank { font-size: 1.6rem; }
 .tv .lname b, .tv .lrow.top .lname b { font-size: 1.6rem; }
 .tv .lname em { font-size: 1.05rem; }
 .tv .lb { --slant: 0.9rem; }

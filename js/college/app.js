@@ -793,7 +793,7 @@
     if (st.loading) return msgLoading('leaders');
     if (st.missing) return msgSnapshot();
     if (st.error) return msgNoData(s ? s.name + ' leaders' : 'this board');
-    var rows = st.rows.slice(0, max || S.settings.limit);
+    var rows = CH.orderRows(st.rows.slice(0, max || S.settings.limit));
     var who = scopeTeam() ? team(scopeTeam()).school : (scopeConfOnly() ? conf(scopeConfOnly()).name : 'D1');
     if (!rows.length) return '<div class="empty"><strong>No ranked players</strong>No ' + esc(who) + ' players are in the NCAA’s national list for this stat (top ' + (st.listSize || 'ranked') + ' qualified players).</div>';
     var shares = CH.shares(rows), counts = {};
@@ -802,7 +802,7 @@
     var html;
     if (kind === 'feat') {
       html = '<div class="lb">' + rows.map(function (r, i) {
-        return '<div class="lrow' + (i === 0 ? ' top' : '') + '"><span class="lrank">' + rk(r) + '</span><span class="lname"><span class="lbar" style="width:calc((100% + var(--slant)) * ' + shares[i].toFixed(3) + ')"></span><b>' + esc(r.name) + '</b><em>' + esc(r.seo ? abbr(r.seo) : r.teamName) + '</em></span><span class="lval">' + esc(r.value) + '</span></div>';
+        return '<div class="lrow' + (i === 0 ? ' top' : '') + '"><span class="lrank">' + rk(r) + '</span><span class="lname"><span class="lbar" style="width:calc(var(--rk-off) + (100% - var(--rk-off) + var(--slant)) * ' + shares[i].toFixed(3) + ')"></span><b>' + esc(r.name) + '</b><em>' + esc(r.seo ? abbr(r.seo) : r.teamName) + '</em></span><span class="lval">' + esc(r.value) + '</span></div>';
       }).join('') + '</div>';
     } else {
       html = '<div class="bd-list">' + rows.map(function (r, i) {
