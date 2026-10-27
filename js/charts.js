@@ -87,16 +87,16 @@
   };
 
   /*
-   * Season in one picture: one bar per game, up for wins and down for losses, height = run margin (capped at 10).
-   * opts: { games: [{ margin, win, tip }], ticks: [{ i, label }], aria }
+   * Season in one picture: one bar per game, up for wins and down for losses, height = margin (capped at opts.cap, 10 by default).
+   * opts: { games: [{ margin, win, tip }], ticks: [{ i, label }], aria, cap }
    */
   C.gameBars = function (opts) {
     var W = opts.w || 760, H = opts.h || 300;
     var m = { l: 40, r: 12, t: 12, b: 30 };
-    var pw = W - m.l - m.r, ph = H - m.t - m.b, mid = m.t + ph / 2, cap = 10;
+    var pw = W - m.l - m.r, ph = H - m.t - m.b, mid = m.t + ph / 2, cap = opts.cap || 10;
     var n = Math.max(opts.games.length, 1), bw = pw / n;
     var out = ['<svg class="chart-svg" viewBox="0 0 ' + W + ' ' + H + '" role="img" aria-label="' + esc(opts.aria || 'Game results') + '">'];
-    [cap, 5, 0, -5, -cap].forEach(function (v) {
+    [cap, cap / 2, 0, -cap / 2, -cap].forEach(function (v) {
       var yy = (mid - v / cap * ph / 2).toFixed(1);
       out.push('<line class="gl' + (v === 0 ? ' zero' : '') + '" x1="' + m.l + '" x2="' + (m.l + pw) + '" y1="' + yy + '" y2="' + yy + '"></line>');
       out.push('<text class="ax" x="' + (m.l - 6) + '" y="' + yy + '" dy="0.35em" text-anchor="end">' + (v === 0 ? '0' : signed(v)) + '</text>');

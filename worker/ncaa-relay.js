@@ -1,9 +1,13 @@
 /*
- * NCAA relay for the College mode of MLB Live Board — a Cloudflare Worker (free plan is plenty).
+ * Data relay for MLB Live Board — a Cloudflare Worker (free plan is plenty).
  *
- * Browsers won't let a web page read the free NCAA API (ncaa-api.henrygd.me) from another site,
- * because it sends no CORS headers. This Worker fetches the same paths for the board, adds those
- * headers, and caches the answers so the board stays well inside the API's 5-requests-a-second limit.
+ * College baseball: browsers won't let a web page read the free NCAA API (ncaa-api.henrygd.me) from
+ * another site, because it sends no CORS headers. This Worker fetches the same paths for the board,
+ * adds those headers, and caches the answers so the board stays well inside the API's 5-requests-a-second limit.
+ *
+ * Football: the NFL and College football boards call ESPN directly. If ESPN ever blocks that from your
+ * site, put this Worker's address in those boards' Settings → Relay address, and their requests go to
+ * /espn/site/... (site.api.espn.com) and /espn/web/... (site.web.api.espn.com) here instead.
  *
  * Deploy: Cloudflare dashboard → Workers & Pages → Create → Create Worker → replace the code with
  * this file → Deploy. Copy the worker's address (https://<name>.<you>.workers.dev) into the board's
@@ -18,6 +22,8 @@
  */
 const DEFAULT_UPSTREAM = 'https://ncaa-api.henrygd.me';
 const ALLOWED_PATH = /^\/(scoreboard|stats|rankings)\/baseball\//;
+const ESPN = { site: 'https://site.api.espn.com', web: 'https://site.web.api.espn.com' };
+const ESPN_PATH = /^\/espn\/(site|web)(\/apis\/(site\/v2|v2|common\/v3)\/sports\/football\/.*)$/;
 
 function corsHeaders(origin, env) {
   const allow = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);
@@ -32,6 +38,7 @@ function corsHeaders(origin, env) {
 
 /* Seconds to cache: finished days for a week, recent scoreboards for 45 seconds, stats and the poll for 30 minutes. */
 function ttlFor(path) {
+  if (/^\/espn\//.test(path)) return /scoreboard/.test(path) ? 30 : 1800;
   const m = path.match(/^\/scoreboard\/baseball\/d1\/(\d{4})\/(\d{2})\/(\d{2})/);
   if (m) {
     const day = Date.UTC(+m[1], +m[2] - 1, +m[3]);
@@ -48,15 +55,16 @@ export default {
     if (request.method !== 'GET') return new Response('Method not allowed', { status: 405, headers: cors });
 
     const url = new URL(request.url);
-    if (!ALLOWED_PATH.test(url.pathname)) return new Response('Not found', { status: 404, headers: cors });
+    const espn = url.pathname.match(ESPN_PATH);
+    if (!espn && !ALLOWED_PATH.test(url.pathname)) return new Response('Not found', { status: 404, headers: cors });
 
-    const upstream = (env.UPSTREAM || DEFAULT_UPSTREAM).replace(/\/+$/, '') + url.pathname + url.search;
+    const upstream = espn ? ESPN[espn[1]] + espn[2] + url.search : (env.UPSTREAM || DEFAULT_UPSTREAM).replace(/\/+$/, '') + url.pathname + url.search;
     const cache = caches.default;
     const key = new Request(upstream, { method: 'GET' });
     let res = await cache.match(key);
     if (!res) {
       const headers = { Accept: 'application/json' };
-      if (env.NCAA_KEY) headers['x-ncaa-key'] = env.NCAA_KEY;
+      if (env.NCAA_KEY && !espn) headers['x-ncaa-key'] = env.NCAA_KEY;
       const up = await fetch(upstream, { headers });
       res = new Response(up.body, { status: up.status, headers: { 'Content-Type': up.headers.get('Content-Type') || 'application/json' } });
       if (up.ok) {

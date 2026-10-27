@@ -1,8 +1,12 @@
-# Baseball Dashboard
+# Multi-Sport Live Board
 
-A broadcast-style MLB stats dashboard that reads live from the public MLB Stats API (`statsapi.mlb.com`). No build step, no API key, no server code. It's plain HTML, CSS and JavaScript.
+A broadcast-style multi-sport stats dashboard that reads live from the public MLB Stats API (`statsapi.mlb.com`). No build step, no API key, no server code. It's plain HTML, CSS and JavaScript.
 
-It also has a **College mode** for NCAA Division I baseball. Switch it on under Settings → League. See [College mode](#college-mode) below.
+It has four boards, switched under Settings → League:
+- **MLB** (MLB Stats API)
+- **College baseball**, NCAA Division I (free NCAA API, through a small relay). See [College mode](#college-mode).
+- **NFL**, all 32 teams (ESPN). See [Football boards](#football-boards-nfl-and-college-football).
+- **College football**, the 138 FBS teams (ESPN). See [Football boards](#football-boards-nfl-and-college-football).
 
 ## Run it
 
@@ -36,7 +40,7 @@ Every block switches to the selected team, and the club colors restyle the page.
 
 Settings open from the **Settings** button. They're saved in the browser's `localStorage`.
 
-- **League:** MLB or College (D1). Display settings (theme, layout, ticker, refresh, leaders per board) are shared by both boards. Each board keeps its own block choices and default view. Adding `?league=college` or `?league=mlb` to the address opens that board regardless of the saved setting, which is handy for a TV.
+- **League:** MLB, College baseball, NFL or College football. Display settings (theme, layout, ticker, refresh, leaders per board) are shared by both boards. Each board keeps its own block choices and default view. Adding `?league=mlb`, `college`, `nfl` or `cfb` to the address opens that board regardless of the saved setting, which is handy for a TV.
 
 - **Theme:** Auto (follows the device), Light, Dark.
 - **Layout:** Standard or **TV**. TV mode fits a 16:9 screen with no scrolling and uses larger type. It rotates the leader boards and charts on a timer, hides the cursor when the mouse is idle, and asks the browser to keep the screen awake. Move the mouse or press Tab to bring up Full screen, Settings and Exit TV mode.
@@ -113,6 +117,56 @@ The NCAA API has no standings and no team schedules. The board handles this as f
 
 `js/college/snapshot.js` holds the final 2026 season: overall records, the final Top 25, the default player and team stat lists, and every NCAA Tournament game. Full regular-season results were too large to bundle. In the snapshot, conference records and the feature charts therefore show **Available with live data**.
 
+## Football boards (NFL and College football)
+
+The NFL and College football boards share one code base (`js/football/`). They have the same layout as the baseball boards, plus TV mode, dark mode and team colors. Both use three levels:
+
+| Board | Level 1 | Level 2 | Level 3 |
+|---|---|---|---|
+| NFL | All NFL | One of the 8 divisions | A team |
+| College football | All FBS (138 teams) | One of the 11 conferences (independents included) | A team |
+
+| Block | Football version |
+|---|---|
+| Header tiles | Record, division (NFL) or conference (FBS) record, points per game, points allowed, point differential, streak, home and road records, one-score games. Also ESPN team stats: total, passing and rushing yards for and against, yards per play, sacks, takeaways and giveaways, turnover differential, third- and fourth-down rates, and penalty yards. |
+| Ticker | Live games show quarter and clock, down and distance, and a ● next to the team with the ball. Inside the 20 the Live tag turns gold and reads **Red zone**. Otherwise the ticker shows the week's slate, or next week's once the current week is done. It also shows the week's finals, and NFL teams on bye. A team page shows the next game and the last 5 results. Postseason games carry their round, such as Wild Card, the CFP First Round or a bowl name. |
+| Standings | NFL, All NFL: the **playoff picture**, seeds 1–7 in each conference plus the first teams out. It uses ESPN's seeds when the standings feed has them. Otherwise it projects seeds from records, marked "projected". NFL division pages: W–L, division record and point differential. All FBS: the **AP Top 25**, which switches to the **CFP rankings** once they're released. FBS conference pages: conference and overall records. |
+| Feature chart | **Race to the playoffs** (NFL) or **Race to the Playoff** (FBS), week by week: games above .500, winning percentage, games back in the division or conference, and standing over time. The NFL adds a playoff-line chart (games above or below the 7th seed). FBS adds AP poll rank by week. **Team trends:** point differential, points scored vs. allowed each week, season in one picture, and one-score games. |
+| Leader boards | 57 player stats from ESPN across passing, rushing, receiving, defense, scoring, kicking, punting and returns. Defaults: passing yards, rushing yards, passing TDs, receiving yards, receptions, sacks, interceptions and tackles. On division, conference and team pages, counting stats include every player. Rate stats (yards per carry, passer rating and so on) list qualified players only, so a single 40-yard carry can't top yards per carry. |
+| Clubs chart | NFL: all 32 teams, highlighting teams in a playoff spot, the division, or the team. FBS: the Top 25, or the conference. |
+
+### Data
+
+The football boards read ESPN's public API. It's unofficial and undocumented, so ESPN could change it.
+
+| Data | Endpoint |
+|---|---|
+| Season calendar (weeks and their dates) and scores | `GET site.api.espn.com/apis/site/v2/sports/football/{nfl\|college-football}/scoreboard?dates=YYYY&seasontype=2&week=N` (FBS adds `&groups=80&limit=300`) |
+| Polls (FBS) | `GET site.api.espn.com/apis/site/v2/sports/football/college-football/rankings?season=YYYY&seasontype=2&week=N` |
+| Standings (NFL playoff seeds) | `GET site.api.espn.com/apis/v2/sports/football/nfl/standings?season=YYYY` |
+| Player leaders | `GET site.web.api.espn.com/apis/common/v3/sports/football/{league}/statistics/byathlete?category=…&sort=<category>.<stat>:desc&season=YYYY&seasontype=2` |
+| Team stats | `GET site.web.api.espn.com/apis/common/v3/sports/football/{league}/statistics/byteam?season=YYYY&seasontype=2` (offense is `splitId` 0, opponents are 900) |
+
+How the boards use it:
+- **The current week comes from ESPN's calendar dates.** ESPN's default scoreboard response can lag, and a request without a week can return an old one, so the boards always ask for the week by number.
+- **Records and charts come from every week's scoreboard,** downloaded once and kept on the device: 18 small requests for the NFL, about 15 larger ones for FBS. NFL division games are any game between two teams in the same division. FBS conference games use ESPN's conference-game flag. Ties count as half a win.
+- **The AP poll is requested by week number.** The newest poll wins, and the CFP rankings take over once ESPN lists them.
+- **Scores refresh every minute while a game is live.** Between games the board sleeps until about a minute before the next kickoff. Stats, standings and polls reload daily at 5 AM.
+- **Relay:** the boards call ESPN directly. If ESPN ever blocks requests from your site, put your relay's address in **Settings → Data → Relay address**. `worker/ncaa-relay.js` has ESPN routes (`/espn/site/…` and `/espn/web/…`) next to the NCAA ones.
+
+### Football snapshot
+
+`js/football/snapshot.js` holds the 2026 season through the weekend of October 17–19:
+- **NFL:** schedules and results through Week 6, and player and team stats through Week 6, from [nflverse](https://github.com/nflverse/nflverse-data).
+- **FBS:** results through Week 7 and player stats from play-by-play, from [cfbfastR](https://github.com/sportsdataverse/cfbfastR-data), plus the Week 8 AP poll from ESPN.
+
+What's missing or approximate:
+- **Play-by-play stats:** FBS stats built from play-by-play are within about 1% of ESPN's.
+- **No touchdown passes in the FBS play-by-play:** passing and receiving TDs show **Available with live data**.
+- **No tackle stats in the FBS play-by-play**, so tackles are unavailable too.
+- **The AP poll stops at No. 20**, because the tool used to read it cut the list off.
+- **NFL playoff seeds in the snapshot are projected from records.**
+
 ## Endpoints used (MLB)
 
 | Data | Endpoint |
@@ -154,9 +208,13 @@ js/college/config.js     304 D1 schools and 31 conferences with colors, NCAA sta
 js/college/api.js        NCAA API calls, request pacing, season download and on-device cache, records
 js/college/snapshot.js   College offline fallback data (final 2026 season)
 js/college/app.js        College board
-worker/ncaa-relay.js     Cloudflare Worker relay for the NCAA API
+js/football/config.js    32 NFL and 138 FBS teams with colors, divisions/conferences, ESPN stat catalog, metrics, defaults
+js/football/api.js       ESPN calls, season download and on-device cache, records from results, polls, seeds
+js/football/snapshot.js  Football offline fallback data (2026 season through Oct 19)
+js/football/app.js       NFL and College football boards (one factory, two instances)
+worker/ncaa-relay.js     Cloudflare Worker relay for the NCAA API, with ESPN routes for the football boards
 ```
 
-Club colors are approximations of each team's primary and secondary colors. A few header shades are deepened so white text stays readable. No team logos are included; they're trademarks of the clubs.
+Club colors are approximations of each team's primary and secondary colors (NFL from nflverse, FBS from collegefootballdata.com, college baseball from teamcolorcodes.com). A few header shades are deepened so white text stays readable. No team logos are included; they're trademarks of the clubs.
 
 MLB data is © MLB Advanced Media and subject to its terms of use, which allow individual, non-commercial use of the Stats API. Check those terms before using this commercially.

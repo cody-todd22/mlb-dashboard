@@ -1016,7 +1016,7 @@
     return '<div class="set-top"><div class="set-top-in"><h1>Settings</h1><div class="set-actions"><button type="button" class="btn-hdr" data-act="close-settings">Back to the board</button></div></div></div><div class="hdr-strip"></div>' +
       '<div class="set-wrap">' +
       '<section class="set-sec" aria-labelledby="sec-league"><div class="card-hd"><h2 id="sec-league">League</h2><span class="sub">Which board to show</span></div><div class="set-body">' +
-      '<div class="field"><span class="flabel">League</span>' + segHTML('league', s.league, [['mlb', 'MLB'], ['college', 'College (D1)']]) + '<span class="hint">College mode covers NCAA Division I baseball: all of D1, each conference, and every D1 team.</span></div>' +
+      '<div class="field"><span class="flabel">League</span>' + segHTML('league', s.league, X.LEAGUE_OPTIONS) + '<span class="hint">College baseball covers NCAA Division I: all of D1, each conference, and every D1 team. NFL and College football (FBS) come from ESPN.</span></div>' +
       '</div></section>' +
       '<section class="set-sec" aria-labelledby="sec-display"><div class="card-hd"><h2 id="sec-display">Display</h2><span class="sub">Saved in this browser · shared with the MLB board</span></div><div class="set-body">' +
       '<div class="field"><span class="flabel">Theme</span>' + segHTML('theme', s.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '<span class="hint">Auto follows your device setting.</span></div>' +
@@ -1174,6 +1174,7 @@
     loadLive().catch(function (err) { useSnapshot(err); }).then(function () { if (S.stopped) return; render(); scheduleScores(); scheduleDaily(); });
   }
   X.CollegeApp = { state: S, render: render, boot: boot, stop: stop };
+  X.APPS = X.APPS || {}; X.APPS.college = X.CollegeApp;
   if (X.currentLeague && X.currentLeague() === 'college') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
   }

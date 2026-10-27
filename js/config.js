@@ -5,13 +5,15 @@
 
   X.API_BASE = 'https://statsapi.mlb.com/api/v1';
 
-  /* Which board to boot: ?league=college|mlb in the address wins, then the saved setting. */
+  /* The four boards. Which one boots: ?league=mlb|college|nfl|cfb in the address wins, then the saved setting. */
+  X.LEAGUE_OPTIONS = [['mlb', 'MLB'], ['college', 'College baseball'], ['nfl', 'NFL'], ['cfb', 'College football']];
   X.currentLeague = function () {
+    var ok = { mlb: 1, college: 1, nfl: 1, cfb: 1 };
     try {
-      var m = /[?&]league=(mlb|college)\b/.exec(window.location.search);
+      var m = /[?&]league=(mlb|college|nfl|cfb)\b/.exec(window.location.search);
       if (m) return m[1];
       var s = JSON.parse(window.localStorage.getItem('mlb-live-board:settings') || '{}');
-      return s.league === 'college' ? 'college' : 'mlb';
+      return ok[s.league] ? s.league : 'mlb';
     } catch (e) { return 'mlb'; }
   };
 
@@ -365,7 +367,7 @@
 
   X.DEFAULT_SETTINGS = {
     v: 2,
-    league: 'mlb',            // mlb | college (College mode lives in js/college/)
+    league: 'mlb',            // mlb | college | nfl | cfb (see X.LEAGUE_OPTIONS)
     theme: 'auto',            // auto | light | dark
     layout: 'standard',       // standard | tv
     defaultTeam: 'MLB',

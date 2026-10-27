@@ -1116,7 +1116,7 @@
     return '<div class="set-top"><div class="set-top-in"><h1>Settings</h1><div class="set-actions"><button type="button" class="btn-hdr" data-act="close-settings">Back to the board</button></div></div></div><div class="hdr-strip"></div>' +
       '<div class="set-wrap">' +
       '<section class="set-sec" aria-labelledby="sec-league"><div class="card-hd"><h2 id="sec-league">League</h2><span class="sub">Which board to show</span></div><div class="set-body">' +
-      '<div class="field"><span class="flabel">League</span>' + segHTML('league', s.league, [['mlb', 'MLB'], ['college', 'College (D1)']]) + '<span class="hint">College mode covers NCAA Division I baseball: all of D1, each conference, and every D1 team. Display settings carry over.</span></div>' +
+      '<div class="field"><span class="flabel">League</span>' + segHTML('league', s.league, X.LEAGUE_OPTIONS) + '<span class="hint">College baseball covers NCAA Division I; NFL and College football (FBS) come from ESPN. Display settings carry over between boards.</span></div>' +
       '</div></section>' +
       '<section class="set-sec" aria-labelledby="sec-display"><div class="card-hd"><h2 id="sec-display">Display</h2><span class="sub">Saved in this browser</span></div><div class="set-body">' +
       '<div class="field"><span class="flabel">Theme</span>' + segHTML('theme', s.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '<span class="hint">Auto follows your device setting.</span></div>' +
@@ -1197,10 +1197,7 @@
     else if (/^\d+$/.test(raw) && ['limit', 'tvRotate'].indexOf(path) >= 0) val = parseInt(raw, 10);
     var prevGameType = S.settings.gameType;
     if (path === 'league') {
-      if (val === 'college') {
-        S.settings.league = 'college'; saveSettings();
-        X.switchLeague('college');
-      }
+      if (val !== 'mlb') { S.settings.league = val; saveSettings(); X.switchLeague(val); }
       return;
     }
     if (path.indexOf('blocks.') === 0) S.settings.blocks[path.slice(7)] = val; else S.settings[path] = val;
@@ -1279,16 +1276,18 @@
   }
   X.App = { state: S, render: render, boot: boot, stop: stop };
   /* Switch boards in place: stop the running one, swap in a fresh #app (dropping its listeners), boot the other. */
+  /* Switch boards in place: stop every board, swap in a fresh #app (dropping listeners), boot the chosen one. */
+  X.APPS = X.APPS || {};
+  X.APPS.mlb = X.App;
   X.switchLeague = function (to) {
-    var from = to === 'college' ? X.App : X.CollegeApp, next = to === 'college' ? X.CollegeApp : X.App;
-    if (!next) return;
-    if (from && from.stop) from.stop();
+    var next = X.APPS[to]; if (!next) return;
+    Object.keys(X.APPS).forEach(function (k) { var a = X.APPS[k]; if (a && a.stop) a.stop(); });
     var old = document.getElementById('app'), fresh = old.cloneNode(false);
     old.parentNode.replaceChild(fresh, old);
     try { window.scrollTo(0, 0); history.replaceState(null, '', location.pathname + location.search.replace(/([?&])league=[^&]*&?/, '$1').replace(/[?&]$/, '') + '#settings'); } catch (e) { /* ignore */ }
     next.boot({ view: 'settings' });
   };
-  if (!X.currentLeague || X.currentLeague() !== 'college') {
+  if (!X.currentLeague || X.currentLeague() === 'mlb') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();
   }
 })();

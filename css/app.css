@@ -362,3 +362,15 @@ html.tv.idle, html.tv.idle * { cursor: none; }
 .tv .st-row.cs { grid-template-columns: minmax(0, 1fr) 4.6rem 5.6rem; }
 .tv .st-row.rk-row { grid-template-columns: 2.2rem minmax(0, 1fr) 4.8rem 3.4rem; }
 .tv-panel [hidden] { display: none !important; }
+
+/* ───────── Football modes ───────── */
+.st-row.pp { grid-template-columns: minmax(0, 1fr) 70px 50px; }
+.st-row.pp.head { background: var(--surface-2); color: var(--ink); font-size: 14px; }
+.st-row.pp.cut { border-bottom: 2px solid var(--team-ink); }
+.st-row.pp.out { color: var(--muted); }
+.st-row.f4 { grid-template-columns: minmax(0, 1fr) 62px 52px 52px; }
+.tv .st-row.pp { grid-template-columns: minmax(0, 1fr) 4.6rem 3.2rem; }
+.tv .st-row.f4 { grid-template-columns: minmax(0, 1fr) 4.4rem 3.6rem 3.6rem; }
+.tk-ball { display: inline-block; margin-left: 4px; font-size: 0.6em; vertical-align: 0.3em; color: var(--team-tick); }
+.tk-item.rz .tk-live { color: #FFD24D; }
+.tk-item.rz .tk-live::before { background: #FFD24D; }
