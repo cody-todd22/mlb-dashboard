@@ -5,8 +5,8 @@
   var X = window.MLBX, C = X.College, API = C.API, CH = X.Charts;
   var esc = CH.esc, rate3 = CH.rate3, signed = CH.signed;
   var LS_SHARED = 'mlb-live-board:settings', LS_COLLEGE = 'mlb-live-board:college';
-  var SHARED_KEYS = ['theme', 'layout', 'tvRotate', 'ticker', 'tickerSpeed', 'refresh', 'limit', 'league'];
-  var SHARED_DEFAULTS = { theme: 'auto', layout: 'standard', tvRotate: 12, ticker: true, tickerSpeed: 'normal', refresh: true, limit: 5, league: 'college' };
+  var SHARED_KEYS = ['theme', 'layout', 'tvRotate', 'tvCharts', 'ticker', 'tickerSpeed', 'refresh', 'limit', 'league'];
+  var SHARED_DEFAULTS = { theme: 'auto', layout: 'standard', tvRotate: 12, tvCharts: 'all', ticker: true, tickerSpeed: 'normal', refresh: true, limit: 5, league: 'college' };
 
   var S = {
     settings: null, cs: null, scope: 'D1', view: 'dash', data: null, ext: {}, pendingExt: {},
@@ -586,7 +586,7 @@
       tr.style.transform = 'translateX(' + TK.x.toFixed(1) + 'px)';
     }
     TK.raf = window.requestAnimationFrame(tickStep);
-    try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!S.stopped && isTV()) CH.fitTV(document.getElementById('app')); }); } catch (e) { /* ignore */ }
+    try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!S.stopped && isTV()) CH.fitTV(document.getElementById('app'), S.tv.board); }); } catch (e) { /* ignore */ }
   }
 
   /* ───────── feature chart (block R) ───────── */
@@ -753,8 +753,8 @@
     crank: function (tv) { return raceChart('crank', tv); }, monthly: function (tv) { return raceChart('monthly', tv); },
     rdiff: rdiffChart, season: seasonBars, form10: formChart, homeaway: homeAway, onerun: oneRun
   };
-  function featureChart(tv) {
-    var mode = S.cs.blocks.race; if (mode === 'hide' || !S.data) return null;
+  function featureChart(tv, force) {
+    var mode = force || S.cs.blocks.race; if (mode === 'hide' || !S.data) return null;
     var meta = FEATURE_META[mode] || FEATURE_META.gap;
     return { title: meta[0], sub: meta[1], body: (BUILDERS[mode] || BUILDERS.gap)(tv) || msgNoData(meta[0]) };
   }
@@ -770,7 +770,7 @@
     if (isD1()) {
       var rk = d.rankings;
       if (!rk || !rk.rows.length) return { title: 'Top 25', body: isLive() ? msgNoData('the Top 25') : msgSnapshot() };
-      var rows = rk.rows.slice(0, tv ? 8 : 25).map(function (r) {
+      var rows = rk.rows.slice(0, 25).map(function (r) {
         var prev = parseInt(r.prev, 10), mv = isNaN(prev) ? 'New' : (prev === r.rank ? '—' : (prev > r.rank ? '▲' + (prev - r.rank) : '▼' + (r.rank - prev)));
         var t = team(r.seo);
         return '<div class="st-row rk-row"><span class="st-rk">' + r.rank + '</span><span class="st-name"><i style="background:' + (t ? t.primary : '#888') + '"></i>' + esc(t ? t.school : r.name) + '</span><span>' + esc(r.record) + '</span><span class="st-mv">' + esc(mv) + '</span></div>';
@@ -778,11 +778,6 @@
       return { title: rk.title.replace(/\.com/, ''), sub: rk.updated, body: '<div class="st-scroll"><div class="st-row rk-row head"><span>#</span><span>Team</span><span>W–L</span><span>Move</span></div>' + rows + '</div>' };
     }
     var cid = scopeConf(), cs = confStandings(cid), noConf = d.partial || !d.recs;
-    if (tv && cs.length > 8) {   // the TV stack shows the top eight, plus the selected team if it's lower
-      var mine = cs.filter(function (r) { return r.seo === scopeTeam(); })[0], top = cs.slice(0, 8);
-      if (mine && top.indexOf(mine) < 0) top = cs.slice(0, 7).concat([mine]);
-      cs = top;
-    }
     var list = cs.map(function (r) { return stRow(r.seo, [r.cw != null && (r.cw + r.cl) ? wl(r.cw, r.cl) : '—', wl(r.w, r.l, r.t)], r.seo === scopeTeam()); });
     var head = '<div class="st-row cs head"><span>Team</span><span>Conf</span><span>Overall</span></div>';
     var note = noConf ? '<div class="lb-note">' + (d.partial ? 'Conference records are available with live data. Sorted by overall record.' : 'Conference records appear once the season’s results finish loading.') + '</div>' : '';
@@ -907,22 +902,48 @@
 
   /* ───────── TV layout ───────── */
   function tvBoards() { var b = S.cs.blocks; return ['feat1', 'feat2', 'board1', 'board2', 'board3', 'board4', 'board5', 'board6'].filter(function (k) { return b[k] && b[k] !== 'hide' && C.STAT_BY_KEY[b[k]]; }); }
-  function tvCharts() { var c = []; if (S.cs.blocks.race !== 'hide') c.push('race'); if (S.cs.blocks.clubs && S.cs.blocks.clubs !== 'hide') c.push('clubs'); return c; }
+  function tvChartModes() {
+    var chosen = S.cs.blocks.race; if (!chosen || chosen === 'hide') return [];
+    if (S.settings.tvCharts === 'chosen') return [chosen];
+    var out = [];
+    C.FEATURE_GROUPS.forEach(function (g) { g.options.forEach(function (o) { var m = o[0]; if (false) return; out.push(m); }); });
+    var i = out.indexOf(chosen); if (i > 0) out = out.slice(i).concat(out.slice(0, i));
+    return out.length ? out : [chosen];
+  }
+  function tvCharts() { var c = tvChartModes().map(function (m) { return 'race:' + m; }); if (S.cs.blocks.clubs && S.cs.blocks.clubs !== 'hide') c.push('clubs'); return c; }
   function progressHTML(n, i) { if (n < 2) return ''; var h = '<div class="tv-progress" aria-hidden="true">'; for (var k = 0; k < n; k++) h += '<i class="' + (k === i ? 'on' : '') + '"></i>'; return h + '</div>'; }
+  function tvCard(which) {
+    if (which === 'clubs') { var c = clubsCardHTML(); return c ? { title: c.title, sub: c.legend + ' highlighted', body: c.body } : null; }
+    return featureChart(true, which.slice(5));
+  }
+  /* Shows the chart at S.tv.chart; a chart with nothing to show (no data yet, snapshot-only, still loading) is passed over
+   * for the next one that has something, and the counter moves to it so the progress dots stay in step. */
   function tvChartPanelHTML() {
     var list = tvCharts(); if (!list.length) return '';
-    var which = list[S.tv.chart % list.length];
-    if (which === 'race') { var r = featureChart(true); return '<div class="card-hd"><h2>' + esc(r.title) + '</h2><span class="sub">' + esc(r.sub) + '</span></div><div class="tv-fill fade-in">' + r.body + '</div>' + progressHTML(list.length, S.tv.chart % list.length); }
-    var c = clubsCardHTML();
-    return '<div class="card-hd"><h2>' + esc(c.title) + '</h2><span class="sub">' + esc(c.legend) + ' highlighted</span></div><div class="tv-fill fade-in">' + c.body + '</div>' + progressHTML(list.length, S.tv.chart % list.length);
+    var n = list.length, start = S.tv.chart % n, pick = null, first = null;
+    for (var k = 0; k < n && !pick; k++) {
+      var idx = (start + k) % n, card = tvCard(list[idx]);
+      if (!card) continue;
+      if (!first) first = { i: idx, c: card };
+      if (!/class="(empty|loading)"/.test(card.body)) pick = { i: idx, c: card };
+    }
+    pick = pick || first; if (!pick) return '';
+    S.tv.chart += (pick.i - start + n) % n;
+    return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill fade-in">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
   }
   function tvBoardPanelHTML() {
     var list = tvBoards(); if (!list.length || !S.data) return '';
     var k = list[S.tv.board % list.length], s = C.STAT_BY_KEY[S.cs.blocks[k]];
     return '<div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + '</span></div><div class="tv-fill fade-in" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
   }
+  function tvUpcoming() {
+    var all = upcoming(80);
+    if (scopeTeam()) return all.slice(0, 6);
+    var cut = nowDate().getTime() + 7 * 86400000, soon = all.filter(function (g) { return new Date(g.date).getTime() <= cut; });
+    return (soon.length >= 6 ? soon : all.slice(0, 6)).slice(0, 40);
+  }
   function tvGamesHTML() {
-    var up = upcoming(5);
+    var up = tvUpcoming();
     if (!up.length) return '<div class="empty"><strong>' + (S.data.phase === 'off' ? 'Season complete' : 'No games this week') + '</strong></div>';
     return '<div class="tv-games">' + up.map(function (g) {
       var s = seriesFor(g);
@@ -933,8 +954,8 @@
   }
   function tvStackHTML() {
     var std = standingsCardHTML(true);
-    return (std ? '<section class="tv-panel" aria-label="Standings"><div class="card-hd"><h2>' + esc(std.title) + '</h2></div>' + std.body + '</section>' : '') +
-      (S.cs.blocks.upnext !== 'hide' ? '<section class="tv-panel" aria-label="Coming up"><div class="card-hd"><h2>Coming up</h2></div>' + tvGamesHTML() + '</section>' : '');
+    return (std ? '<section class="tv-panel" data-tv-pages aria-label="Standings"><div class="card-hd"><h2>' + esc(std.title) + '</h2></div>' + std.body + '</section>' : '') +
+      (S.cs.blocks.upnext !== 'hide' ? '<section class="tv-panel" data-tv-pages aria-label="Coming up"><div class="card-hd"><h2>Coming up</h2></div>' + tvGamesHTML() + '</section>' : '');
   }
   function tvMainHTML() {
     if (!S.data) return '<div class="tv-main"><div class="tv-panel loading">Loading the NCAA API</div></div>';
@@ -947,7 +968,7 @@
     var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
     if (a) a.innerHTML = tvBoardPanelHTML();
     if (c && S.tv.board % 2 === 0) c.innerHTML = tvChartPanelHTML();
-    CH.fitTV(document.getElementById('app'));
+    CH.fitTV(document.getElementById('app'), S.tv.board);
   }
   function startTV() { clearInterval(S.tv.timer); if (!isTV()) { releaseWake(); return; } S.tv.timer = setInterval(tvTick, Math.max(5, S.settings.tvRotate) * 1000); requestWake(); }
   function requestWake() {
@@ -1022,6 +1043,7 @@
       '<div class="field"><span class="flabel">Theme</span>' + segHTML('theme', s.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '<span class="hint">Auto follows your device setting.</span></div>' +
       '<div class="field"><span class="flabel">Layout</span>' + segHTML('layout', s.layout, [['standard', 'Standard'], ['tv', 'TV']]) + '<span class="hint">TV fits a 16:9 screen with no scrolling, uses larger type, rotates leader boards and charts, and keeps the screen awake where the browser allows it.</span></div>' +
       '<div class="field"><label for="set-tvRotate">TV rotation</label>' + sel('set-tvRotate', 'tvRotate', [[8, 'Every 8 seconds'], [12, 'Every 12 seconds'], [20, 'Every 20 seconds'], [30, 'Every 30 seconds']]) + '</div>' +
+      '<div class="field"><label for="set-tvCharts">TV charts</label>' + sel('set-tvCharts', 'tvCharts', [['all', 'Cycle through every chart'], ['chosen', 'Only the chosen feature chart']]) + '<span class="hint">In TV layout the chart panel can step through every feature chart available for this page, then the club comparison.</span></div>' +
       '<div class="field"><span class="flabel">Ticker</span>' + segHTML('ticker', s.ticker, [[true, 'On'], [false, 'Off']]) + '</div>' +
       '<div class="field"><span class="flabel">Ticker speed</span>' + segHTML('tickerSpeed', s.tickerSpeed, [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']]) + '</div>' +
       '</div></section>' +
@@ -1059,7 +1081,7 @@
     else if (isTV()) app.innerHTML = '<div class="tvapp">' + headerHTML() + tvMainHTML() + '</div>';
     else app.innerHTML = headerHTML() + '<main class="dash" id="main">' + dashMainHTML() + '</main>';
     if (focusId) { var el = document.getElementById(focusId); if (el) el.focus(); }
-    if (isTV()) CH.fitTV(app);
+    if (isTV()) CH.fitTV(app, S.tv.board);
     startTV();
   }
   function refreshMain() {
@@ -1069,7 +1091,7 @@
       var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
       if (!a || !c) { render(); return; }
       a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
-      CH.fitTV(document.getElementById('app'));
+      CH.fitTV(document.getElementById('app'), S.tv.board);
       return;
     }
     var main = document.getElementById('main'); if (main) main.innerHTML = dashMainHTML(); else render();

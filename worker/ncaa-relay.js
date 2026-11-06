@@ -7,11 +7,13 @@
  *
  * Football: the NFL and College football boards call ESPN directly. If ESPN ever blocks that from your
  * site, put this Worker's address in those boards' Settings → Relay address, and their requests go to
- * /espn/site/... (site.api.espn.com) and /espn/web/... (site.web.api.espn.com) here instead.
+ * /espn/site/... (site.api.espn.com), /espn/web/... (site.web.api.espn.com) and /espn/core/...
+ * (sports.core.api.espn.com, used for each week's AP poll) here instead.
  *
  * Deploy: Cloudflare dashboard → Workers & Pages → Create → Create Worker → replace the code with
  * this file → Deploy. Copy the worker's address (https://<name>.<you>.workers.dev) into the board's
- * Settings → NCAA data address.
+ * Settings (College baseball: NCAA data address; football boards: Relay address). The address is kept
+ * only in that browser's local storage, so it never ends up in your repository.
  *
  * Optional variables (Worker → Settings → Variables):
  *   UPSTREAM         your own copy of the NCAA API (docker run -p 3000:3000 henrygd/ncaa-api),
@@ -22,8 +24,8 @@
  */
 const DEFAULT_UPSTREAM = 'https://ncaa-api.henrygd.me';
 const ALLOWED_PATH = /^\/(scoreboard|stats|rankings)\/baseball\//;
-const ESPN = { site: 'https://site.api.espn.com', web: 'https://site.web.api.espn.com' };
-const ESPN_PATH = /^\/espn\/(site|web)(\/apis\/(site\/v2|v2|common\/v3)\/sports\/football\/.*)$/;
+const ESPN = { site: 'https://site.api.espn.com', web: 'https://site.web.api.espn.com', core: 'https://sports.core.api.espn.com' };
+const ESPN_PATH = /^\/espn\/(site|web|core)(\/(?:apis\/(?:site\/v2|v2|common\/v3)\/sports\/football|v2\/sports\/football\/leagues)\/.*)$/;
 
 function corsHeaders(origin, env) {
   const allow = (env.ALLOWED_ORIGINS || '').split(',').map((s) => s.trim()).filter(Boolean);

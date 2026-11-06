@@ -4,7 +4,8 @@
  *
  * Endpoints (paths relative to the hosts below):
  *   site  /apis/site/v2/sports/football/<league>/scoreboard?dates=YYYY&seasontype=T&week=W[&groups=80&limit=300]
- *   site  /apis/site/v2/sports/football/college-football/rankings?season=YYYY&seasontype=2&week=W
+ *   site  /apis/site/v2/sports/football/college-football/rankings   (newest polls; the week parameter is ignored)
+ *   core  /v2/sports/football/leagues/college-football/seasons/YYYY/types/T/weeks/W/rankings/1   (AP poll for one week)
  *   site  /apis/v2/sports/football/<league>/standings?season=YYYY[&group=80]
  *   web   /apis/common/v3/sports/football/<league>/statistics/byathlete?...&category=&sort=<cat>.<field>:desc
  *   web   /apis/common/v3/sports/football/<league>/statistics/byteam?... */
@@ -12,7 +13,7 @@
   'use strict';
   var X = (window.MLBX = window.MLBX || {});
   var F = (X.Football = X.Football || {});
-  var HOST = { site: 'https://site.api.espn.com', web: 'https://site.web.api.espn.com' };
+  var HOST = { site: 'https://site.api.espn.com', web: 'https://site.web.api.espn.com', core: 'https://sports.core.api.espn.com' };
 
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
@@ -27,7 +28,7 @@
     var API = { ymd: ymd, num: num }, relay = '';
     API.setRelay = function (r) { relay = String(r || '').trim().replace(/\/+$/, ''); };
     API.relay = function () { return relay; };
-    /* With a relay set (worker/ncaa-relay.js), ESPN calls go through it: <relay>/espn/<site|web>/<path>. */
+    /* With a relay set (worker/ncaa-relay.js), ESPN calls go through it: <relay>/espn/<site|web|core>/<path>. */
     function url(host, path) { return relay ? relay + '/espn/' + host + path : HOST[host] + path; }
 
     var queue = [], active = 0, MAX = 4;
@@ -179,20 +180,28 @@
           rows: p.ranks.map(function (r) { return { rank: r.current, prev: r.previous, id: String(r.team && r.team.id), record: r.recordSummary || '', points: r.points, fpv: r.firstPlaceVotes }; }) };
       });
     };
-    /* AP poll for each week so far (for the poll-race chart) → { week: { teamId: rank } } */
-    API.pollHistory = function (year, upTo) {
-      var ws = []; for (var w = 2; w <= upTo + 1; w++) ws.push(w);
-      return Promise.all(ws.map(function (w) {
-        return API.get('site', sp + '/rankings?season=' + year + '&seasontype=2&week=' + w).then(function (j) {
-          var ap = ((j && j.rankings) || []).filter(function (p) { return lc(p.type) === 'ap'; })[0];
-          if (!ap) return null;
-          var m = {}; (ap.ranks || []).forEach(function (r) { m[String(r.team && r.team.id)] = r.current; });
-          return { label: (ap.occurrence && ap.occurrence.displayValue) || ('Week ' + (w - 1)), date: ap.date, ranks: m };
+    /* AP poll for each week so far (for the poll-race chart) → [{ label, date, ranks: { teamId: rank } }], oldest first.
+     * The site rankings endpoint ignores its week parameter (it always answers with the newest poll), so each week's
+     * poll comes from ESPN's core API instead: preseason = season type 1 week 1, then regular-season weeks 2…,
+     * then the final poll (type 3 week 1) once the postseason starts. AP Top 25 is ranking id 1 there. */
+    API.pollHistory = function (year, upTo, post) {
+      var ws = [[1, 1]]; for (var w = 2; w <= upTo + 1; w++) ws.push([2, w]);
+      if (post) ws.push([3, 1]);
+      return Promise.all(ws.map(function (tw) {
+        return API.get('core', '/v2/sports/football/leagues/' + L.path + '/seasons/' + year + '/types/' + tw[0] + '/weeks/' + tw[1] + '/rankings/1').then(function (ap) {
+          if (!ap || !(ap.ranks || []).length) return null;
+          var m = {};
+          ap.ranks.forEach(function (r) {
+            var id = String((r.team && (r.team.id || ((r.team.$ref || '').match(/\/teams\/(\d+)/) || [])[1])) || '');
+            if (id && r.current) m[id] = r.current;
+          });
+          var label = (ap.occurrence && ap.occurrence.displayValue) || (tw[0] === 1 ? 'Preseason' : tw[0] === 3 ? 'Final' : 'Week ' + tw[1]);
+          return { key: tw[0] + ':' + ((ap.occurrence && ap.occurrence.number) || tw[1]), label: label, date: ap.date || '', ranks: m };
         }).catch(function () { return null; });
       })).then(function (rs) {
         var seen = {}, out = [];
-        rs.forEach(function (r) { if (r && !seen[r.date]) { seen[r.date] = 1; out.push(r); } });
-        out.sort(function (a, b) { return a.date < b.date ? -1 : 1; });
+        rs.forEach(function (r) { if (r && !seen[r.key]) { seen[r.key] = 1; out.push(r); } });
+        out.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
         return out;
       });
     };

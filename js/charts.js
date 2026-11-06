@@ -208,9 +208,17 @@
   };
 
   /* TV layout: hide trailing rows (games, standings, leaders) that don't fit their panel, so nothing is cut in half. */
-  C.fitTV = function (root) {
+  /* TV layout: make every panel fit its box.
+   * Panels marked data-tv-pages hold their whole list and show it a page at a time: the rows that fit make a page,
+   * and the page shown is `step` (the TV rotation counter) modulo the number of pages, with progress dots underneath.
+   * A list's single leading header row stays on every page; when a list has several section headers (AFC/NFC),
+   * a section that won't fit in what's left of a page starts the next one. Other panels just drop rows that don't fit. */
+  C.fitTV = function (root, step) {
     if (!root || !document.documentElement.classList.contains('tv')) return;
-    root.querySelectorAll('.tv-panel').forEach(function (panel) {
+    if (step != null) root.__tvStep = step;
+    step = root.__tvStep || 0;
+    root.querySelectorAll('.tv-panel[data-tv-pages]').forEach(function (panel) { pageTV(panel, step); });
+    root.querySelectorAll('.tv-panel:not([data-tv-pages])').forEach(function (panel) {
       var lists = [];
       panel.querySelectorAll('.tv-games, .lb, .st-scroll').forEach(function (l) { lists.push([].slice.call(l.children).filter(function (c) { return !c.classList.contains('head'); })); });
       var direct = [].slice.call(panel.children).filter(function (c) { return c.classList.contains('st-row') && !c.classList.contains('head'); });
@@ -225,6 +233,55 @@
       });
     });
   };
+
+  function pageTV(panel, step) {
+    var old = panel.querySelector(':scope > .tv-pager'); if (old) old.parentNode.removeChild(old);
+    panel.style.height = '';
+    var list = panel.querySelector('.tv-games, .st-scroll');
+    if (!list) return;
+    var items = [].slice.call(list.children);
+    items.forEach(function (c) { c.hidden = false; });
+    var heads = items.filter(function (c) { return c.classList.contains('head'); });
+    var sticky = heads.length === 1 && items[0] === heads[0] ? heads[0] : null;
+    var flow = items.filter(function (c) { return c !== sticky; });
+    if (!flow.length) return;
+    /* Measure with every row showing and the dots in place. */
+    var pager = document.createElement('div'); pager.className = 'tv-progress tv-pager'; pager.setAttribute('aria-hidden', 'true'); pager.innerHTML = '<i></i>';
+    panel.appendChild(pager);
+    var box = panel.getBoundingClientRect(), limit = pager.getBoundingClientRect().top - 2;
+    var top = flow[0].getBoundingClientRect().top, cap = limit - top;
+    list.classList.add('tv-measure');
+    var rects = flow.map(function (c) { return c.getBoundingClientRect(); });
+    list.classList.remove('tv-measure');
+    var size = rects.map(function (r, i) { return (i + 1 < rects.length ? rects[i + 1].top : r.bottom) - r.top; });
+    var pages = [[]], used = 0, section = -1;   // section: index of the header the current rows belong to
+    function newPage(i) {
+      pages.push([]); used = 0;
+      if (section >= 0 && !flow[i].classList.contains('head')) { pages[pages.length - 1].push(flow[section]); used = size[section]; }   // repeat the section's header
+    }
+    flow.forEach(function (c, i) {
+      var isHead = c.classList.contains('head') && heads.length > 1;
+      if (isHead && used > 0) {   // a section that won't fit in what's left starts a new page
+        var need = size[i];
+        for (var j = i + 1; j < flow.length && !flow[j].classList.contains('head'); j++) need += size[j];
+        if (used + need > cap + 0.5) newPage(i);
+      }
+      if (isHead) section = i;
+      if (used + size[i] > cap + 0.5 && pages[pages.length - 1].length) newPage(i);
+      pages[pages.length - 1].push(c); used += size[i];
+    });
+    /* A header never ends a page. */
+    for (var p = 0; p < pages.length - 1; p++) {
+      var pg = pages[p], last = pg[pg.length - 1];
+      if (pg.length > 1 && last.classList.contains('head')) { pg.pop(); pages[p + 1].unshift(last); }
+    }
+    if (pages.length < 2) { panel.removeChild(pager); return; }
+    var on = step % pages.length;
+    panel.style.height = box.height + 'px';   // keep the box steady whatever page is showing
+    flow.forEach(function (c) { c.hidden = pages[on].indexOf(c) < 0; });
+    var dots = ''; for (var n = 0; n < pages.length; n++) dots += '<i class="' + (n === on ? 'on' : '') + '"></i>';
+    pager.innerHTML = dots;
+  }
 
   C.rate3 = rate3;
   C.signed = signed;

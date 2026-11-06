@@ -378,6 +378,7 @@
     ticker: true,
     tickerSpeed: 'normal',    // slow | normal | fast
     tvRotate: 12,             // seconds per TV panel
+    tvCharts: 'all',          // TV chart panel: all = cycle every feature chart, chosen = only the one picked under Feature chart
     refresh: true,
     sampleLive: false,        // snapshot preview only
     blocks: {
