@@ -7,7 +7,7 @@
 
   var S = {
     settings: null, team: 'MLB', view: 'dash', data: null, leaders: {}, pending: {}, ext: {}, pendingExt: {},
-    tickPaused: false, tv: { chart: 0, board: 0, timer: null }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false
+    tickPaused: false, tv: { chart: 0, board: 0, timer: null, last: {} }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false
   };
   var TK = { x: 0, last: null, raf: null, hover: false };
 
@@ -1018,13 +1018,13 @@
     }
     pick = pick || first; if (!pick) return '';
     S.tv.chart += (pick.i - start + n) % n;
-    return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill fade-in">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
+    return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
   }
   function tvBoardPanelHTML() {
     var list = tvBoards(); if (!list.length || !S.data) return '';
     var k = list[S.tv.board % list.length], s = X.STAT_BY_KEY[S.settings.blocks[k]];
     if (!s) return '';
-    return '<div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + '</span></div><div class="tv-fill fade-in" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
+    return '<div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + '</span></div><div class="tv-fill" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
   }
   function tvUpcoming() {
     var all = upcoming(80);
@@ -1050,17 +1050,23 @@
   function tvMainHTML() {
     if (!S.data) return '<div class="tv-main"><div class="tv-panel loading">Loading the MLB Stats API</div></div>';
     return '<div class="tv-main">' +
-      '<section class="tv-panel" id="tv-chart" aria-label="Charts">' + tvChartPanelHTML() + '</section>' +
-      '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + tvBoardPanelHTML() + '</section>' +
-      '<div class="tv-stack" id="tv-stack">' + tvStackHTML() + '</div></div>' +
+      '<section class="tv-panel" id="tv-chart" aria-label="Charts">' + (S.tv.last.c = tvChartPanelHTML()) + '</section>' +
+      '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + (S.tv.last.b = tvBoardPanelHTML()) + '</section>' +
+      '<div class="tv-stack" id="tv-stack">' + (S.tv.last.s = tvStackHTML()) + '</div></div>' +
       '<div class="tv-gear" id="tv-gear"><button type="button" data-act="fullscreen">Full screen</button><button type="button" data-act="open-settings">Settings</button><button type="button" data-act="exit-tv">Exit TV mode</button></div>';
   }
   function tvTick() {
-    S.tv.board++; if (S.tv.board % 2 === 0) S.tv.chart++;
-    var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
-    if (a) a.innerHTML = tvBoardPanelHTML();
-    if (c && S.tv.board % 2 === 0) c.innerHTML = tvChartPanelHTML();
-    CH.fitTV(document.getElementById('app'), S.tv.board);
+    S.tv.board++; S.tv.chart++;   // leaders, charts and the standings/coming-up pages all turn together
+    tvSwap();
+  }
+  /* Refresh the TV panels in place: each one crossfades only if its content changed. */
+  function tvSwap() {
+    var app = document.getElementById('app'), st = document.getElementById('tv-stack');
+    function fit() { CH.fitTV(app, S.tv.board); }
+    CH.swapTV(document.getElementById('tv-board'), tvBoardPanelHTML(), fit);
+    CH.swapTV(document.getElementById('tv-chart'), tvChartPanelHTML(), fit);
+    if (st) CH.swapTV(st, tvStackHTML(), fit);
+    fit();
   }
   function startTV() {
     clearInterval(S.tv.timer);
@@ -1144,7 +1150,7 @@
       '<section class="set-sec" aria-labelledby="sec-display"><div class="card-hd"><h2 id="sec-display">Display</h2><span class="sub">Saved in this browser</span></div><div class="set-body">' +
       '<div class="field"><span class="flabel">Theme</span>' + segHTML('theme', s.theme, [['auto', 'Auto'], ['light', 'Light'], ['dark', 'Dark']]) + '<span class="hint">Auto follows your device setting.</span></div>' +
       '<div class="field"><span class="flabel">Layout</span>' + segHTML('layout', s.layout, [['standard', 'Standard'], ['tv', 'TV']]) + '<span class="hint">TV fits a 16:9 screen with no scrolling, uses larger type, rotates leader boards and charts, and keeps the screen awake where the browser allows it.</span></div>' +
-      '<div class="field"><label for="set-tvRotate">TV rotation</label>' + sel('set-tvRotate', 'tvRotate', [[8, 'Every 8 seconds'], [12, 'Every 12 seconds'], [20, 'Every 20 seconds'], [30, 'Every 30 seconds']]) + '<span class="hint">How long each leader board stays up in TV layout. Charts switch every second turn.</span></div>' +
+      '<div class="field"><label for="set-tvRotate">TV rotation</label>' + sel('set-tvRotate', 'tvRotate', [[8, 'Every 8 seconds'], [12, 'Every 12 seconds'], [20, 'Every 20 seconds'], [30, 'Every 30 seconds']]) + '<span class="hint">How long each leader board stays up in TV layout. Leaders, charts and the standings and coming-up pages all turn together, with a quick crossfade.</span></div>' +
       '<div class="field"><label for="set-tvCharts">TV charts</label>' + sel('set-tvCharts', 'tvCharts', [['all', 'Cycle through every chart'], ['chosen', 'Only the chosen feature chart']]) + '<span class="hint">In TV layout the chart panel can step through every feature chart available for this page, then the club comparison.</span></div>' +
       '<div class="field"><span class="flabel">Ticker</span>' + segHTML('ticker', s.ticker, [[true, 'On'], [false, 'Off']]) + '</div>' +
       '<div class="field"><span class="flabel">Ticker speed</span>' + segHTML('tickerSpeed', s.tickerSpeed, [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']]) + '</div>' +
@@ -1185,7 +1191,7 @@
     else if (isTV()) app.innerHTML = '<div class="tvapp">' + headerHTML() + tvMainHTML() + '</div>';
     else app.innerHTML = headerHTML() + '<main class="dash" id="main">' + dashMainHTML() + '</main>';
     if (focusId) { var el = document.getElementById(focusId); if (el) el.focus(); }
-    if (isTV()) CH.fitTV(app, S.tv.board);
+    if (isTV()) { CH.markTV(document.getElementById('tv-chart'), S.tv.last.c); CH.markTV(document.getElementById('tv-board'), S.tv.last.b); CH.markTV(document.getElementById('tv-stack'), S.tv.last.s); CH.fitTV(app, S.tv.board); }
     ensureLeaders();
     startTV();
   }
@@ -1195,8 +1201,7 @@
     if (isTV()) {
       var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
       if (!a || !c) { render(); return; }
-      a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
-      CH.fitTV(document.getElementById('app'), S.tv.board);
+      tvSwap();
       return;
     }
     var main = document.getElementById('main');
@@ -1298,7 +1303,7 @@
       if (isTV()) requestWake();
       if (isLive() && S.settings.refresh && S.nextDailyAt && Date.now() >= S.nextDailyAt) dailyReload();
   }
-  X.App = { state: S, render: render, boot: boot, stop: stop };
+  X.App = { state: S, render: render, refresh: refreshMain, boot: boot, stop: stop };
   /* Switch boards in place: stop the running one, swap in a fresh #app (dropping its listeners), boot the other. */
   /* Switch boards in place: stop every board, swap in a fresh #app (dropping listeners), boot the chosen one. */
   X.APPS = X.APPS || {};

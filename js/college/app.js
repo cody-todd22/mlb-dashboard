@@ -10,7 +10,7 @@
 
   var S = {
     settings: null, cs: null, scope: 'D1', view: 'dash', data: null, ext: {}, pendingExt: {},
-    tickPaused: false, tv: { chart: 0, board: 0, timer: null }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false, crawl: null
+    tickPaused: false, tv: { chart: 0, board: 0, timer: null, last: {} }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false, crawl: null
   };
   var TK = { x: 0, last: null, raf: null, hover: false };
 
@@ -760,9 +760,10 @@
   }
 
   /* ───────── standings, leaders, clubs, upcoming ───────── */
-  function stRow(seo, cols, me) {
+  /* rank: the team's place in the conference table, shown in a # column like the Top 25. */
+  function stRow(seo, cols, me, rank) {
     var t = team(seo) || { primary: '#888', school: seo };
-    return '<div class="st-row cs' + (me ? ' me' : '') + '"><span class="st-name"><i style="background:' + t.primary + '"></i>' + esc(t.school) + '</span>' + cols.map(function (c) { return '<span>' + esc(c) + '</span>'; }).join('') + '</div>';
+    return '<div class="st-row cs' + (rank ? ' crk' : '') + (me ? ' me' : '') + '">' + (rank ? '<span class="st-rk">' + rank + '</span>' : '') + '<span class="st-name"><i style="background:' + t.primary + '"></i>' + esc(t.school) + '</span>' + cols.map(function (c) { return '<span>' + esc(c) + '</span>'; }).join('') + '</div>';
   }
   function standingsCardHTML(tv) {
     if (S.cs.blocks.standings === 'hide' || !S.data) return null;
@@ -778,8 +779,8 @@
       return { title: rk.title.replace(/\.com/, ''), sub: rk.updated, body: '<div class="st-scroll"><div class="st-row rk-row head"><span>#</span><span>Team</span><span>W–L</span><span>Move</span></div>' + rows + '</div>' };
     }
     var cid = scopeConf(), cs = confStandings(cid), noConf = d.partial || !d.recs;
-    var list = cs.map(function (r) { return stRow(r.seo, [r.cw != null && (r.cw + r.cl) ? wl(r.cw, r.cl) : '—', wl(r.w, r.l, r.t)], r.seo === scopeTeam()); });
-    var head = '<div class="st-row cs head"><span>Team</span><span>Conf</span><span>Overall</span></div>';
+    var list = cs.map(function (r, i) { return stRow(r.seo, [r.cw != null && (r.cw + r.cl) ? wl(r.cw, r.cl) : '—', wl(r.w, r.l, r.t)], r.seo === scopeTeam(), i + 1); });
+    var head = '<div class="st-row cs crk head"><span>#</span><span>Team</span><span>Conf</span><span>Overall</span></div>';
     var note = noConf ? '<div class="lb-note">' + (d.partial ? 'Conference records are available with live data. Sorted by overall record.' : 'Conference records appear once the season’s results finish loading.') + '</div>' : '';
     return { title: conf(cid).full, body: '<div class="st-scroll">' + head + list.join('') + '</div>' + note };
   }
@@ -929,12 +930,12 @@
     }
     pick = pick || first; if (!pick) return '';
     S.tv.chart += (pick.i - start + n) % n;
-    return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill fade-in">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
+    return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
   }
   function tvBoardPanelHTML() {
     var list = tvBoards(); if (!list.length || !S.data) return '';
     var k = list[S.tv.board % list.length], s = C.STAT_BY_KEY[S.cs.blocks[k]];
-    return '<div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + '</span></div><div class="tv-fill fade-in" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
+    return '<div class="card-hd"><h2>' + esc(s.short) + ' leaders</h2><span class="sub">' + esc(s.name) + '</span></div><div class="tv-fill" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
   }
   function tvUpcoming() {
     var all = upcoming(80);
@@ -959,16 +960,22 @@
   }
   function tvMainHTML() {
     if (!S.data) return '<div class="tv-main"><div class="tv-panel loading">Loading the NCAA API</div></div>';
-    return '<div class="tv-main"><section class="tv-panel" id="tv-chart" aria-label="Charts">' + tvChartPanelHTML() + '</section>' +
-      '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + tvBoardPanelHTML() + '</section><div class="tv-stack" id="tv-stack">' + tvStackHTML() + '</div></div>' +
+    return '<div class="tv-main"><section class="tv-panel" id="tv-chart" aria-label="Charts">' + (S.tv.last.c = tvChartPanelHTML()) + '</section>' +
+      '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + (S.tv.last.b = tvBoardPanelHTML()) + '</section><div class="tv-stack" id="tv-stack">' + (S.tv.last.s = tvStackHTML()) + '</div></div>' +
       '<div class="tv-gear" id="tv-gear"><button type="button" data-act="fullscreen">Full screen</button><button type="button" data-act="open-settings">Settings</button><button type="button" data-act="exit-tv">Exit TV mode</button></div>';
   }
   function tvTick() {
-    S.tv.board++; if (S.tv.board % 2 === 0) S.tv.chart++;
-    var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
-    if (a) a.innerHTML = tvBoardPanelHTML();
-    if (c && S.tv.board % 2 === 0) c.innerHTML = tvChartPanelHTML();
-    CH.fitTV(document.getElementById('app'), S.tv.board);
+    S.tv.board++; S.tv.chart++;   // leaders, charts and the standings/coming-up pages all turn together
+    tvSwap();
+  }
+  /* Refresh the TV panels in place: each one crossfades only if its content changed. */
+  function tvSwap() {
+    var app = document.getElementById('app'), st = document.getElementById('tv-stack');
+    function fit() { CH.fitTV(app, S.tv.board); }
+    CH.swapTV(document.getElementById('tv-board'), tvBoardPanelHTML(), fit);
+    CH.swapTV(document.getElementById('tv-chart'), tvChartPanelHTML(), fit);
+    if (st) CH.swapTV(st, tvStackHTML(), fit);
+    fit();
   }
   function startTV() { clearInterval(S.tv.timer); if (!isTV()) { releaseWake(); return; } S.tv.timer = setInterval(tvTick, Math.max(5, S.settings.tvRotate) * 1000); requestWake(); }
   function requestWake() {
@@ -1081,7 +1088,7 @@
     else if (isTV()) app.innerHTML = '<div class="tvapp">' + headerHTML() + tvMainHTML() + '</div>';
     else app.innerHTML = headerHTML() + '<main class="dash" id="main">' + dashMainHTML() + '</main>';
     if (focusId) { var el = document.getElementById(focusId); if (el) el.focus(); }
-    if (isTV()) CH.fitTV(app, S.tv.board);
+    if (isTV()) { CH.markTV(document.getElementById('tv-chart'), S.tv.last.c); CH.markTV(document.getElementById('tv-board'), S.tv.last.b); CH.markTV(document.getElementById('tv-stack'), S.tv.last.s); CH.fitTV(app, S.tv.board); }
     startTV();
   }
   function refreshMain() {
@@ -1090,8 +1097,7 @@
     if (isTV()) {
       var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
       if (!a || !c) { render(); return; }
-      a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
-      CH.fitTV(document.getElementById('app'), S.tv.board);
+      tvSwap();
       return;
     }
     var main = document.getElementById('main'); if (main) main.innerHTML = dashMainHTML(); else render();
@@ -1195,7 +1201,7 @@
     TK.raf = window.requestAnimationFrame(tickStep);
     loadLive().catch(function (err) { useSnapshot(err); }).then(function () { if (S.stopped) return; render(); scheduleScores(); scheduleDaily(); });
   }
-  X.CollegeApp = { state: S, render: render, boot: boot, stop: stop };
+  X.CollegeApp = { state: S, render: render, refresh: refreshMain, boot: boot, stop: stop };
   X.APPS = X.APPS || {}; X.APPS.college = X.CollegeApp;
   if (X.currentLeague && X.currentLeague() === 'college') {
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot); else boot();

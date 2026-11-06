@@ -12,7 +12,7 @@
   function make(LID) {
     var L = F.LEAGUES[LID], API = F.makeAPI(L), NFL = LID === 'nfl', LS_OWN = 'mlb-live-board:' + LID;
     var S = { settings: null, cs: null, scope: 'ALL', view: 'dash', data: null, ext: {}, pendingExt: {}, tickPaused: false,
-      tv: { chart: 0, board: 0, timer: null }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false, crawl: null, stopped: true };
+      tv: { chart: 0, board: 0, timer: null, last: {} }, timers: {}, nextDailyAt: 0, wake: null, loadError: null, resetArmed: false, crawl: null, stopped: true };
     var TK = { x: 0, last: null, raf: null, hover: false };
 
     /* ───────── utilities ───────── */
@@ -690,9 +690,10 @@
     }
 
     /* ───────── standings block ───────── */
-    function stRow(id, cols, me, extraCls) {
+    /* rank: the team's place in the conference table, shown in a # column like the AP Top 25. */
+    function stRow(id, cols, me, extraCls, rank) {
       var t = team(id) || { primary: '#888', name: id };
-      return '<div class="st-row ' + (extraCls || 'cs') + (me ? ' me' : '') + '"><span class="st-name"><i style="background:' + t.primary + '"></i>' + esc(NFL ? t.nick : t.school) + '</span>' + cols.map(function (c) { return '<span>' + esc(c) + '</span>'; }).join('') + '</div>';
+      return '<div class="st-row ' + (extraCls || 'cs') + (rank ? ' crk' : '') + (me ? ' me' : '') + '">' + (rank ? '<span class="st-rk">' + rank + '</span>' : '') + '<span class="st-name"><i style="background:' + t.primary + '"></i>' + esc(NFL ? t.nick : t.school) + '</span>' + cols.map(function (c) { return '<span>' + esc(c) + '</span>'; }).join('') + '</div>';
     }
     function standingsCardHTML(tv) {
       if (S.cs.blocks.standings === 'hide' || !S.data) return null;
@@ -721,11 +722,11 @@
         return { title: title, sub: [rk.label, rk.partial ? 'top ' + rk.rows.length + ' in the snapshot' : ''].filter(Boolean).join(' · '), body: '<div class="st-scroll"><div class="st-row rk-row head"><span>#</span><span>Team</span><span>W–L</span><span>Move</span></div>' + rows + '</div>' };
       }
       var gid = scopeGroup(), gs = groupStandings(gid);
-      var list = gs.map(function (id) {
+      var list = gs.map(function (id, i) {
         var r = rec(id), grp = r.gw + r.gl + r.gt ? wl(r.gw, r.gl, r.gt) : '0–0';
-        return NFL ? stRow(id, [wl(r.w, r.l, r.t), grp, signed(r.pf - r.pa)], id === scopeTeam(), 'f4') : stRow(id, [grp, wl(r.w, r.l, r.t)], id === scopeTeam());
+        return NFL ? stRow(id, [wl(r.w, r.l, r.t), grp, signed(r.pf - r.pa)], id === scopeTeam(), 'f4') : stRow(id, [grp, wl(r.w, r.l, r.t)], id === scopeTeam(), null, i + 1);
       });
-      var head = NFL ? '<div class="st-row f4 head"><span>Team</span><span>W–L</span><span>Div</span><span>Diff</span></div>' : '<div class="st-row cs head"><span>Team</span><span>Conf</span><span>Overall</span></div>';
+      var head = NFL ? '<div class="st-row f4 head"><span>Team</span><span>W–L</span><span>Div</span><span>Diff</span></div>' : '<div class="st-row cs crk head"><span>#</span><span>Team</span><span>Conf</span><span>Overall</span></div>';
       return { title: group(gid).full, body: '<div class="st-scroll">' + head + list.join('') + '</div>' };
     }
 
@@ -874,12 +875,12 @@
       }
       pick = pick || first; if (!pick) return '';
       S.tv.chart += (pick.i - start + n) % n;
-      return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill fade-in">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
+      return '<div class="card-hd"><h2>' + esc(pick.c.title) + '</h2><span class="sub">' + esc(pick.c.sub) + '</span></div><div class="tv-fill">' + pick.c.body + '</div>' + progressHTML(n, pick.i);
     }
     function tvBoardPanelHTML() {
       var list = tvBoards(); if (!list.length || !S.data) return '';
       var k = list[S.tv.board % list.length], s = F.STAT_BY_KEY[S.cs.blocks[k]];
-      return '<div class="card-hd"><h2>' + esc(s.name) + '</h2><span class="sub">' + esc(s.short) + ' leaders</span></div><div class="tv-fill fade-in" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
+      return '<div class="card-hd"><h2>' + esc(s.name) + '</h2><span class="sub">' + esc(s.short) + ' leaders</span></div><div class="tv-fill" style="padding:0">' + leaderBodyHTML(s.key, 'feat', Math.min(8, S.settings.limit)) + '</div>' + progressHTML(list.length, S.tv.board % list.length);
     }
     function tvUpcoming() {
       var all = upcoming(80);
@@ -903,17 +904,23 @@
     }
     function tvMainHTML() {
       if (!S.data) return '<div class="tv-main"><div class="tv-panel loading">Loading ESPN</div></div>';
-      return '<div class="tv-main"><section class="tv-panel" id="tv-chart" aria-label="Charts">' + tvChartPanelHTML() + '</section>' +
-        '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + tvBoardPanelHTML() + '</section><div class="tv-stack" id="tv-stack">' + tvStackHTML() + '</div></div>' +
+      return '<div class="tv-main"><section class="tv-panel" id="tv-chart" aria-label="Charts">' + (S.tv.last.c = tvChartPanelHTML()) + '</section>' +
+        '<section class="tv-panel" id="tv-board" aria-label="Leaders">' + (S.tv.last.b = tvBoardPanelHTML()) + '</section><div class="tv-stack" id="tv-stack">' + (S.tv.last.s = tvStackHTML()) + '</div></div>' +
         '<div class="tv-gear" id="tv-gear"><button type="button" data-act="fullscreen">Full screen</button><button type="button" data-act="open-settings">Settings</button><button type="button" data-act="exit-tv">Exit TV mode</button></div>';
     }
     function tvTick() {
       if (S.stopped) return;
-      S.tv.board++; if (S.tv.board % 2 === 0) S.tv.chart++;
-      var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart');
-      if (a) a.innerHTML = tvBoardPanelHTML();
-      if (c && S.tv.board % 2 === 0) c.innerHTML = tvChartPanelHTML();
-      CH.fitTV(document.getElementById('app'), S.tv.board);
+      S.tv.board++; S.tv.chart++;   // leaders, charts and the standings/coming-up pages all turn together
+      tvSwap();
+    }
+    /* Refresh the TV panels in place: each one crossfades only if its content changed. */
+    function tvSwap() {
+      var app = document.getElementById('app'), st = document.getElementById('tv-stack');
+      function fit() { CH.fitTV(app, S.tv.board); }
+      CH.swapTV(document.getElementById('tv-board'), tvBoardPanelHTML(), fit);
+      CH.swapTV(document.getElementById('tv-chart'), tvChartPanelHTML(), fit);
+      if (st) CH.swapTV(st, tvStackHTML(), fit);
+      fit();
     }
     function startTV() { clearInterval(S.tv.timer); if (!isTV()) { releaseWake(); return; } S.tv.timer = setInterval(tvTick, Math.max(5, S.settings.tvRotate) * 1000); requestWake(); }
     function requestWake() {
@@ -1022,7 +1029,7 @@
       else if (isTV()) app.innerHTML = '<div class="tvapp">' + headerHTML() + tvMainHTML() + '</div>';
       else app.innerHTML = headerHTML() + '<main class="dash" id="main">' + dashMainHTML() + '</main>';
       if (focusId) { var el = document.getElementById(focusId); if (el) el.focus(); }
-      if (isTV()) CH.fitTV(app, S.tv.board);
+      if (isTV()) { CH.markTV(document.getElementById('tv-chart'), S.tv.last.c); CH.markTV(document.getElementById('tv-board'), S.tv.last.b); CH.markTV(document.getElementById('tv-stack'), S.tv.last.s); CH.fitTV(app, S.tv.board); }
       startTV();
     }
     function refreshMain() {
@@ -1030,8 +1037,7 @@
       if (isTV()) {
         var a = document.getElementById('tv-board'), c = document.getElementById('tv-chart'), st = document.getElementById('tv-stack');
         if (!a || !c) { render(); return; }
-        a.innerHTML = tvBoardPanelHTML(); c.innerHTML = tvChartPanelHTML(); if (st) st.innerHTML = tvStackHTML();
-        CH.fitTV(document.getElementById('app'), S.tv.board);
+        tvSwap();
         return;
       }
       var main = document.getElementById('main'); if (main) main.innerHTML = dashMainHTML(); else render();
@@ -1130,7 +1136,7 @@
       try { if (document.fonts && document.fonts.ready) document.fonts.ready.then(function () { if (!S.stopped && isTV()) CH.fitTV(document.getElementById('app'), S.tv.board); }); } catch (e) { /* ignore */ }
       loadLive().catch(function (err) { useSnapshot(err); }).then(function () { if (S.stopped) return; render(); scheduleScores(); scheduleDaily(); });
     }
-    return { state: S, render: render, boot: boot, stop: stop, api: API };
+    return { state: S, render: render, refresh: refreshMain, boot: boot, stop: stop, api: API };
   }
 
   F.Apps = { nfl: make('nfl'), cfb: make('cfb') };

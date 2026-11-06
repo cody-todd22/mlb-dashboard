@@ -344,14 +344,20 @@ html.tv #app { height: 100%; }
 .tv-gear button { min-height: 44px; padding: 0 1rem; border: 0; background: var(--bar); color: var(--bar-ink); font-family: var(--font-display); font-weight: 700; font-size: 1rem; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; box-shadow: 0 2px 8px var(--shadow); }
 html.tv.idle, html.tv.idle * { cursor: none; }
 .fade-in { animation: fadeIn 0.6s ease both; }
+/* TV crossfade: fade out quickly, swap, fade back in (charts.js swapTV / page turns) */
+.tv-swap > *:not(.tv-panel), .tv-swap > .tv-panel > * { transition: opacity 0.45s ease; }
+.tv-swap.tv-out > *:not(.tv-panel), .tv-swap.tv-out > .tv-panel > * { opacity: 0; transition-duration: 0.26s; }
 @keyframes fadeIn { from { opacity: 0.25; } to { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .fade-in { animation: none; } .tv-gear { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .fade-in { animation: none; } .tv-gear, .tv-swap > *, .tv-swap > .tv-panel > * { transition: none; } }
 
 /* ───────── College mode ───────── */
 .st-scroll { max-height: 470px; overflow-y: auto; }
 .st-row.cs { grid-template-columns: minmax(0, 1fr) 66px 84px; }
 .st-row.rk-row { grid-template-columns: 30px minmax(0, 1fr) 70px 50px; }
 .st-row.rk-row span:nth-child(2) { text-align: left; }
+.st-row.cs.crk { grid-template-columns: 30px minmax(0, 1fr) 66px 84px; }   /* conference table with a # column */
+.st-row.crk span:nth-child(2) { text-align: left; }
+.st-row.me .st-rk { color: inherit; }
 .st-rk { font-weight: 800; font-style: italic; color: var(--team-ink); text-align: left !important; }
 .st-mv { font-size: 14px; color: var(--muted); align-self: center; }
 .tk-rk { font-size: 0.72em; font-weight: 700; opacity: 0.8; margin-right: 3px; vertical-align: 0.12em; }
@@ -361,6 +367,7 @@ html.tv.idle, html.tv.idle * { cursor: none; }
 .tv .st-scroll { max-height: none; overflow: hidden; }
 .tv .st-row.cs { grid-template-columns: minmax(0, 1fr) 4.6rem 5.6rem; }
 .tv .st-row.rk-row { grid-template-columns: 2.2rem minmax(0, 1fr) 4.8rem 3.4rem; }
+.tv .st-row.cs.crk { grid-template-columns: 2.2rem minmax(0, 1fr) 4.6rem 5.6rem; }
 .tv-panel [hidden] { display: none !important; }
 .tv-pager { margin-top: auto; padding-top: 0.5rem; }
 .tv-measure > .tv-game { flex: none; max-height: none; }   /* natural row heights while TV paging measures */
@@ -377,3 +384,10 @@ html.tv.idle, html.tv.idle * { cursor: none; }
 .tk-ball { display: inline-block; margin-left: 4px; font-size: 0.6em; vertical-align: 0.3em; color: var(--team-tick); }
 .tk-item.rz .tk-live { color: #FFD24D; }
 .tk-item.rz .tk-live::before { background: #FFD24D; }
+
+/* Conference tables with a # column on narrow phones: tighter columns, and long school names wrap at word breaks */
+@media (max-width: 480px) {
+  .st-row.cs.crk { grid-template-columns: 22px minmax(0, 1fr) 50px 62px; gap: 6px; padding-inline: 12px; font-size: 17px; }
+  .st-row.cs.crk .st-name { overflow-wrap: anywhere; }
+  .st-row.cs.crk.head { font-size: 11px; letter-spacing: 0.04em; }
+}

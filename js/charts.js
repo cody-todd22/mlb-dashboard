@@ -234,7 +234,31 @@
     });
   };
 
+  function calm() { return !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches); }
+  var FADE_OUT = 260;   // ms; keep in step with .tv-out in app.css
+
+  /* TV panels: swap in new content with a crossfade (fade out, swap, fade in), and only when the content really
+   * changed, so a refresh that brings identical numbers doesn't move at all. `after` runs once the new content is in. */
+  C.swapTV = function (el, html, after) {
+    if (!el) return;
+    if (el.__tvHTML === html && !el.__tvT) return;
+    el.__tvHTML = html;
+    clearTimeout(el.__tvT); el.__tvT = 0;
+    if (calm() || !el.innerHTML.trim()) { el.innerHTML = html; el.classList.remove('tv-out'); if (after) after(); return; }
+    el.classList.add('tv-swap', 'tv-out');
+    el.__tvT = setTimeout(function () {
+      el.__tvT = 0;
+      el.innerHTML = el.__tvHTML;             // new content arrives faded out …
+      if (after) after();
+      void el.offsetWidth;                    // … gets a frame at opacity 0 …
+      el.classList.remove('tv-out');          // … and fades in
+    }, FADE_OUT);
+  };
+  /* After a full render: note what each panel is showing so the next swap can tell whether anything changed. */
+  C.markTV = function (el, html) { if (el) { clearTimeout(el.__tvT); el.__tvT = 0; el.__tvHTML = html; } };
+
   function pageTV(panel, step) {
+    clearTimeout(panel.__tvT); panel.__tvT = 0;
     var old = panel.querySelector(':scope > .tv-pager'); if (old) old.parentNode.removeChild(old);
     panel.style.height = '';
     var list = panel.querySelector('.tv-games, .st-scroll');
@@ -275,12 +299,22 @@
       var pg = pages[p], last = pg[pg.length - 1];
       if (pg.length > 1 && last.classList.contains('head')) { pg.pop(); pages[p + 1].unshift(last); }
     }
-    if (pages.length < 2) { panel.removeChild(pager); return; }
-    var on = step % pages.length;
+    if (pages.length < 2) { panel.removeChild(pager); list.classList.remove('tv-out'); panel.__tvKey = null; panel.__tvRows = null; return; }
+    var on = step % pages.length, key = on + '/' + pages.length, prev = panel.__tvRows;
     panel.style.height = box.height + 'px';   // keep the box steady whatever page is showing
-    flow.forEach(function (c) { c.hidden = pages[on].indexOf(c) < 0; });
-    var dots = ''; for (var n = 0; n < pages.length; n++) dots += '<i class="' + (n === on ? 'on' : '') + '"></i>';
-    pager.innerHTML = dots;
+    function show(rows, at) {
+      flow.forEach(function (c) { c.hidden = rows.indexOf(c) < 0; });
+      var dots = ''; for (var n = 0; n < pages.length; n++) dots += '<i class="' + (n === at ? 'on' : '') + '"></i>';
+      pager.innerHTML = dots;
+    }
+    var turning = panel.__tvKey != null && panel.__tvKey !== key && prev && prev.some(function (c) { return flow.indexOf(c) >= 0; });
+    panel.__tvKey = key; panel.__tvRows = pages[on];
+    if (!turning || calm()) { show(pages[on], on); panel.__tvAt = on; void list.offsetWidth; list.classList.remove('tv-out'); return; }
+    /* Page turn: fade the old page out, then bring the new one in. */
+    show(prev, panel.__tvAt != null ? panel.__tvAt : on);
+    list.classList.add('tv-swap', 'tv-out');
+    panel.__tvT = setTimeout(function () { panel.__tvT = 0; show(pages[on], on); void list.offsetWidth; list.classList.remove('tv-out'); }, FADE_OUT);
+    panel.__tvAt = on;
   }
 
   C.rate3 = rate3;
