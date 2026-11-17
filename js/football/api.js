@@ -26,7 +26,7 @@
 
   F.makeAPI = function (L) {
     var API = { ymd: ymd, num: num }, relay = '';
-    API.setRelay = function (r) { relay = String(r || '').trim().replace(/\/+$/, ''); };
+    API.setRelay = function (r) { relay = X.safeBase(r); };   // https only; see X.safeBase
     API.relay = function () { return relay; };
     /* With a relay set (worker/ncaa-relay.js), ESPN calls go through it: <relay>/espn/<site|web|core>/<path>. */
     function url(host, path) { return relay ? relay + '/espn/' + host + path : HOST[host] + path; }
@@ -45,9 +45,34 @@
         clearTimeout(timer);
         if (!r.ok) { var e = new Error('ESPN returned ' + r.status); e.status = r.status; throw e; }
         return r.json();
-      }, function (err) { clearTimeout(timer); throw err; });
+      }, function (err) { clearTimeout(timer); if (ctl && ctl.signal.aborted) err.timeout = true; throw err; });
     }
-    API.get = function (host, path) { var u = url(host, path); return new Promise(function (ok, fail) { queue.push({ url: u, ok: ok, fail: fail }); pump(); }); };
+    /* ESPN's stats service often answers 503 at random (about half the time on a bad day), so a request that fails
+       with a server error or rate limit is tried again after about 1, 3 and 8 seconds before it counts as failed.
+       A connection that fails outright (offline, blocked) or times out is retried once, so a board that can't reach
+       ESPN at all still falls back to its snapshot quickly. 404s and other client errors fail straight away. */
+    var RETRY_WAIT = [1000, 3000, 8000];
+    function retryable(e, tries) {
+      if (e && (e.status === 429 || e.status >= 500)) return tries < RETRY_WAIT.length;
+      if (e && e.status) return false;
+      return tries < 1;
+    }
+    API.get = function (host, path) {
+      var u = url(host, path);
+      return new Promise(function (ok, fail) {
+        var tries = 0;
+        function attempt() {
+          queue.push({ url: u, ok: ok, fail: function (e) {
+            if (!retryable(e, tries)) return fail(e);
+            var wait = RETRY_WAIT[Math.min(tries, RETRY_WAIT.length - 1)] * (0.75 + Math.random() * 0.5);
+            tries++;
+            setTimeout(attempt, wait);
+          } });
+          pump();
+        }
+        attempt();
+      });
+    };
     API.pace = function (m) { MAX = m; };
 
     var sp = '/apis/site/v2/sports/football/' + L.path, grp = L.groupsParam ? '&groups=' + L.groupsParam : '';
@@ -94,7 +119,7 @@
       var d = new Date(ev.date || c.date);
       return {
         pk: String(ev.id), date: d.toISOString(), day: ymd(d), week: (ev.week && ev.week.number) || fallbackWeek, type: (ev.season && ev.season.type) || fallbackType,
-        state: stateOf(st), detail: (st.type && (st.type.shortDetail || st.type.detail)) || '', period: st.period || 0, clock: st.displayClock || '',
+        state: stateOf(st), detail: (st.type && (st.type.shortDetail || st.type.detail)) || '', period: parseInt(st.period, 10) || 0, clock: st.displayClock || '',
         tbd: !!(ev.timeValid === false || c.timeValid === false), tv: tv.slice(0, 2).join('/'), note: note, neutral: !!c.neutralSite, confGame: !!c.conferenceCompetition,
         away: side(away), home: side(home),
         sit: s.downDistanceText || s.shortDownDistanceText ? { text: s.shortDownDistanceText || s.downDistanceText, long: s.downDistanceText || '', poss: s.possession ? String(s.possession) : '', rz: !!s.isRedZone } : null
@@ -113,7 +138,7 @@
     API.unpack = function (a, type, week) {
       var d = new Date(a[1] * 1000);
       return { pk: a[0], date: d.toISOString(), day: ymd(d), week: week, type: type, state: ST[a[2]] || 'off', note: a[7] || '', confGame: !!a[8], neutral: !!a[9],
-        away: { id: String(a[3]), score: a[5], abbr: a[10] || '' }, home: { id: String(a[4]), score: a[6], abbr: a[11] || '' }, tbd: !!a[12], detail: '', tv: '', sit: null };
+        away: { id: String(a[3]), score: num(a[5]), abbr: a[10] || '' }, home: { id: String(a[4]), score: num(a[6]), abbr: a[11] || '' }, tbd: !!a[12], detail: '', tv: '', sit: null };
     };
     function load(year) {
       try { var raw = window.localStorage.getItem(LS + year); if (raw) { var s = JSON.parse(raw); if (s && s.v === 1) return s; } } catch (e) { /* unavailable */ }
@@ -164,6 +189,15 @@
     };
 
     /* ───── polls (FBS): the newest of the AP and CFP rankings ───── */
+    function coreRefId(t) { return String((t && (t.id || ((t.$ref || '').match(/\/teams\/(\d+)/) || [])[1])) || ''); }
+    /* One poll for one week from ESPN's core API (CFP rankings = id 21, AP Top 25 = id 1), or null if there isn't one. */
+    function corePoll(year, week, id) {
+      return API.get('core', '/v2/sports/football/leagues/' + L.path + '/seasons/' + year + '/types/2/weeks/' + week + '/rankings/' + id).then(function (p) {
+        if (!p || !(p.ranks || []).length) return null;
+        return { name: p.name, short: p.shortName || p.name, type: lc(p.type), label: (p.occurrence && p.occurrence.displayValue) || ('Week ' + week), date: p.date || '',
+          rows: p.ranks.map(function (r) { return { rank: parseInt(r.current, 10) || 0, prev: parseInt(r.previous, 10) || 0, id: coreRefId(r.team), record: (r.record && r.record.summary) || r.recordSummary || '', points: r.points, fpv: r.firstPlaceVotes }; }) };
+      }, function (e) { if (e && e.status === 404) return null; throw e; });
+    }
     API.rankings = function (year, week) {
       var tries = [week + 1, week, week - 1].filter(function (w) { return w >= 1; });
       return Promise.all(tries.map(function (w) {
@@ -175,9 +209,16 @@
           return polls.filter(function (p) { return lc(p.type) === type && (p.ranks || []).length; }).sort(function (a, b) { return (b.date || '') < (a.date || '') ? -1 : 1; })[0];
         }
         var p = latest('cfp') || latest('ap');
-        if (!p) return null;
-        return { name: p.name, short: p.shortName || p.name, type: lc(p.type), label: (p.occurrence && p.occurrence.displayValue) || '', date: p.date || '',
-          rows: p.ranks.map(function (r) { return { rank: r.current, prev: r.previous, id: String(r.team && r.team.id), record: r.recordSummary || '', points: r.points, fpv: r.firstPlaceVotes }; }) };
+        if (p) return { name: p.name, short: p.shortName || p.name, type: lc(p.type), label: (p.occurrence && p.occurrence.displayValue) || '', date: p.date || '',
+          rows: p.ranks.map(function (r) { return { rank: parseInt(r.current, 10) || 0, prev: parseInt(r.previous, 10) || 0, id: String(r.team && r.team.id), record: r.recordSummary || '', points: r.points, fpv: r.firstPlaceVotes }; }) };
+        /* The site feed only lists the newest week's polls, and early in a week that can be just the coaches' poll
+           (the AP and CFP rankings for the week aren't out yet). Fall back to the most recent week that has one. */
+        var weeks = [week + 1, week, week - 1, week - 2].filter(function (w) { return w >= 1; });
+        function step(i) {
+          if (i >= weeks.length) return null;
+          return corePoll(year, weeks[i], 21).then(function (cfp) { return cfp || corePoll(year, weeks[i], 1); }).then(function (hit) { return hit || step(i + 1); });
+        }
+        return step(0);
       });
     };
     /* AP poll for each week so far (for the poll-race chart) → [{ label, date, ranks: { teamId: rank } }], oldest first.
@@ -197,11 +238,44 @@
           });
           var label = (ap.occurrence && ap.occurrence.displayValue) || (tw[0] === 1 ? 'Preseason' : tw[0] === 3 ? 'Final' : 'Week ' + tw[1]);
           return { key: tw[0] + ':' + ((ap.occurrence && ap.occurrence.number) || tw[1]), label: label, date: ap.date || '', ranks: m };
-        }).catch(function () { return null; });
+        }).catch(function (e) { if (e && e.status === 404) return null; throw e; });   // 404 = no poll that week; anything else fails the whole history so it's retried rather than shown with gaps
       })).then(function (rs) {
         var seen = {}, out = [];
         rs.forEach(function (r) { if (r && !seen[r.key]) { seen[r.key] = 1; out.push(r); } });
         out.sort(function (a, b) { return a.date < b.date ? -1 : (a.date > b.date ? 1 : 0); });
+        return out;
+      });
+    };
+
+    /* ───── one game's detail (box score, scoring plays, top performers, line) ───── */
+    API.summary = function (pk) {
+      return API.get('site', sp + '/summary?event=' + encodeURIComponent(pk)).then(function (j) {
+        var c = ((j.header || {}).competitions || [])[0] || {}, out = { sides: {}, scoring: [], leaders: [], stats: [], info: {} };
+        (c.competitors || []).forEach(function (x) {
+          out.sides[x.homeAway] = { id: String((x.team && x.team.id) || x.id || ''), abbr: (x.team && x.team.abbreviation) || '', score: num(x.score),
+            lines: (x.linescores || []).map(function (l) { return l.displayValue != null ? String(l.displayValue) : ''; }),
+            record: (((x.record || []).filter(function (r) { return r.type === 'total'; })[0] || (x.record || [])[0]) || {}).summary || '' };
+        });
+        out.scoring = (j.scoringPlays || []).map(function (p) {
+          return { q: parseInt(p.period && p.period.number, 10) || 0, clock: (p.clock && p.clock.displayValue) || '', teamId: String((p.team && p.team.id) || ''), type: (p.type && p.type.abbreviation) || '',
+            text: p.text || '', a: num(p.awayScore), h: num(p.homeScore) };
+        });
+        out.leaders = (j.leaders || []).map(function (t) {
+          return { teamId: String((t.team && t.team.id) || ''), items: (t.leaders || []).map(function (l) {
+            var a = (l.leaders || [])[0] || {};
+            return { label: String(l.displayName || '').replace(/ Yards$/, ''), name: (a.athlete && (a.athlete.shortName || a.athlete.displayName)) || '', value: a.displayValue || '' };
+          }).filter(function (i) { return i.name; }) };
+        });
+        var bt = ((j.boxscore || {}).teams || []), by = {};
+        bt.forEach(function (t) { var m = by[t.homeAway] = {}; (t.statistics || []).forEach(function (s) { m[s.name] = { label: s.label, v: s.displayValue }; }); });
+        ['totalYards', 'netPassingYards', 'rushingYards', 'firstDowns', 'thirdDownEff', 'turnovers', 'totalPenaltiesYards', 'possessionTime'].forEach(function (k) {
+          var a = (by.away || {})[k], h = (by.home || {})[k];
+          if (a || h) out.stats.push([(a || h).label, a ? a.v : '', h ? h.v : '']);
+        });
+        var gi = j.gameInfo || {}, v = gi.venue || {}, ad = v.address || {}, pc = (j.pickcenter || [])[0];
+        out.info = { venue: v.fullName || '', place: [ad.city, ad.state].filter(Boolean).join(', '), attendance: num(gi.attendance),
+          tv: (c.broadcasts || []).map(function (b) { return b.media && b.media.shortName; }).filter(Boolean).join(', '),
+          line: pc && pc.details ? String(pc.details) : '', ou: pc ? num(pc.overUnder) : null, book: (pc && pc.provider && pc.provider.name) || '' };
         return out;
       });
     };
@@ -235,7 +309,7 @@
       function fetchAll(o) {
         return API.get('web', statPath(stat, o, 1, limit)).then(function (j) {
           var rows = parseAthletes(j, stat), pages = (j.pagination && j.pagination.pages) || 1, more = [];
-          if (opts.all) for (var p = 2; p <= Math.min(pages, 8); p++) more.push(API.get('web', statPath(stat, o, p, limit)).then(function (jj) { return parseAthletes(jj, stat); }, function () { return []; }));
+          if (opts.all) for (var p = 2; p <= Math.min(pages, opts.pages || 8); p++) more.push(API.get('web', statPath(stat, o, p, limit)).then(function (jj) { return parseAthletes(jj, stat); }, function () { return []; }));
           return Promise.all(more).then(function (rs) { rs.forEach(function (r) { rows = rows.concat(r); }); return rows; });
         });
       }

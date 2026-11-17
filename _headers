@@ -1,0 +1,17 @@
+# Security headers for Netlify (this file must sit in the published folder, next to index.html).
+# - Scripts and styles load only from this site (plus Google Fonts for the typeface); no inline scripts,
+#   no plugins, no framing by other sites.
+# - The service worker (sw.js) and the app manifest load from this site only.
+# - connect-src stays "https:" because the board calls MLB, ESPN and the NCAA API, and optionally a relay
+#   address you type into Settings. To lock it down further, list just the hosts you use.
+/*
+  Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' https:; manifest-src 'self'; worker-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'self'; object-src 'none'
+  X-Content-Type-Options: nosniff
+  X-Frame-Options: SAMEORIGIN
+  Referrer-Policy: no-referrer
+  Permissions-Policy: camera=(), microphone=(), geolocation=(), payment=(), usb=()
+  Strict-Transport-Security: max-age=31536000
+
+# The service worker must always be fetched fresh so a new deploy is noticed.
+/sw.js
+  Cache-Control: no-cache

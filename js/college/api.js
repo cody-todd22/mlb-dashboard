@@ -12,7 +12,7 @@
   var API = (C.API = {});
 
   var base = C.API_DEFAULT;
-  API.setBase = function (b) { base = String(b || '').trim().replace(/\/+$/, '') || C.API_DEFAULT; };
+  API.setBase = function (b) { base = X.safeBase(b) || C.API_DEFAULT; };   // https only; see X.safeBase
   API.base = function () { return base; };
 
   /* ───── request queue: the public API allows 5 requests a second per address ───── */
@@ -30,7 +30,7 @@
     var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 25000);
     return fetch(url, ctl ? { signal: ctl.signal } : {}).then(function (r) {
       clearTimeout(timer);
-      if (r.status === 429 && tries < 3) return new Promise(function (res) { setTimeout(res, 1500 * (tries + 1)); }).then(function () { return run(url, tries + 1); });
+      if ((r.status === 429 && tries < 3) || (r.status >= 500 && tries < 1)) return   // rate limit: back off up to 3 times; server error: one more try new Promise(function (res) { setTimeout(res, 1500 * (tries + 1)); }).then(function () { return run(url, tries + 1); });
       if (!r.ok) { var e = new Error('NCAA API returned ' + r.status); e.status = r.status; throw e; }
       return r.json();
     }, function (err) { clearTimeout(timer); throw err; });
@@ -122,7 +122,7 @@
     if (memo.rank) return memo.rank;
     var p = API.get('/rankings/baseball/d1').then(function (j) {
       return { title: j.title || 'Top 25', updated: j.updated || '', rows: ((j && j.data) || []).map(function (r) {
-        return { rank: parseInt(r.RANK, 10), name: String(r.TEAM || r.SCHOOL || '').trim(), record: r['OVERALL RECORD'] || r.RECORD || '', prev: r['PREVIOUS RANK'] || r.PREVIOUS || '' };
+        return { rank: parseInt(r.RANK, 10) || 0, name: String(r.TEAM || r.SCHOOL || '').trim(), record: r['OVERALL RECORD'] || r.RECORD || '', prev: r['PREVIOUS RANK'] || r.PREVIOUS || '' };
       }) };
     });
     memo.rank = p; p.catch(function () { delete memo.rank; });
@@ -135,8 +135,8 @@
   var ST = { f: 'final', l: 'live', p: 'pre', o: 'off' };
   API.unpack = function (a, day) {
     return { pk: a[0], day: day, date: new Date(a[1] * 1000).toISOString(), state: ST[a[2]] || 'off', round: a[7] || '', post: !!a[7],
-      away: { seo: a[3], score: a[5], name: a[8] || (C.TEAM_BY_SEO[a[3]] || {}).name || a[3] },
-      home: { seo: a[4], score: a[6], name: a[9] || (C.TEAM_BY_SEO[a[4]] || {}).name || a[4] } };
+      away: { seo: a[3], score: typeof a[5] === 'number' ? a[5] : null, name: a[8] || (C.TEAM_BY_SEO[a[3]] || {}).name || a[3] },
+      home: { seo: a[4], score: typeof a[6] === 'number' ? a[6] : null, name: a[9] || (C.TEAM_BY_SEO[a[4]] || {}).name || a[4] } };
   };
   function loadStore(year) {
     try { var raw = window.localStorage.getItem(LS_PREFIX + year); if (raw) { var s = JSON.parse(raw); if (s && s.v === 1) return s; } } catch (e) { /* unavailable */ }

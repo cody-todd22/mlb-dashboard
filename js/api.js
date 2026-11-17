@@ -15,15 +15,21 @@
     return parts.join('&');
   }
 
-  API.get = function (path, params) {
+  /* A server error or rate limit is tried again after about 1 and 3 seconds; a connection that fails outright is
+     tried once more, so an offline board still falls back to its snapshot quickly. Other errors fail straight away. */
+  var RETRY_WAIT = [1000, 3000];
+  API.get = function (path, params, tries) {
+    tries = tries || 0;
     var url = X.API_BASE + path + (params ? '?' + qs(params) : '');
     var ctl = typeof AbortController !== 'undefined' ? new AbortController() : null;
     var timer = setTimeout(function () { if (ctl) ctl.abort(); }, 20000);
+    function again() { return new Promise(function (res) { setTimeout(res, RETRY_WAIT[tries] * (0.75 + Math.random() * 0.5)); }).then(function () { return API.get(path, params, tries + 1); }); }
     return fetch(url, ctl ? { signal: ctl.signal } : {}).then(function (r) {
       clearTimeout(timer);
+      if ((r.status === 429 || r.status >= 500) && tries < RETRY_WAIT.length) return again();
       if (!r.ok) throw new Error('MLB Stats API returned ' + r.status + ' for ' + path);
       return r.json();
-    }, function (err) { clearTimeout(timer); throw err; });
+    }, function (err) { clearTimeout(timer); if (tries < 1) return again(); throw err; });
   };
 
   function num(v) {
@@ -45,6 +51,9 @@
     });
     return st;
   }
+  /* Counts (wins, scores, ranks) are whole numbers or nothing — never raw text from a response. */
+  function cnt(v) { var n = typeof v === 'number' ? v : parseInt(v, 10); return isFinite(n) ? n : 0; }
+  function score(v) { var n = typeof v === 'number' ? v : parseInt(v, 10); return isFinite(n) ? n : null; }
   API.num = num;
   API.ipNum = ipNum;
 
@@ -88,7 +97,7 @@
       (rec.teamRecords || []).forEach(function (tr) {
         var split = {};
         ((tr.records || {}).splitRecords || []).forEach(function (s) { split[s.type] = s; });
-        var w = tr.wins, l = tr.losses;
+        var w = cnt(tr.wins), l = cnt(tr.losses);
         var sc = (tr.streak && tr.streak.streakCode) || '';
         function wl(s) { return s ? s.wins + '–' + s.losses : null; }
         function pct(s) { return s && (s.wins + s.losses) ? s.wins / (s.wins + s.losses) : null; }
@@ -189,7 +198,7 @@
         blocks.filter(function (b) { return String(b.statGroup || '').toLowerCase() === s.group; })[0];
       if (!block) return [];
       return (block.leaders || []).map(function (r) {
-        return { rank: r.rank, name: (r.person && r.person.fullName) || '—', pid: r.person && r.person.id, teamId: r.team && r.team.id, value: r.value };
+        return { rank: cnt(r.rank), name: (r.person && r.person.fullName) || '—', pid: r.person && r.person.id, teamId: r.team && r.team.id, value: r.value };
       });
     });
   };
@@ -244,7 +253,7 @@
     var ss = g.seriesStatus || null;
     var post = ['F', 'D', 'L', 'W'].indexOf(g.gameType) >= 0;
     function prob(side) { var p = g.teams[side].probablePitcher; return p ? p.fullName : null; }
-    function side(s) { return { id: g.teams[s].team.id, name: g.teams[s].team.name, score: g.teams[s].score }; }
+    function side(s) { return { id: g.teams[s].team.id, name: g.teams[s].team.name, score: score(g.teams[s].score) }; }
     return {
       pk: g.gamePk, date: g.gameDate, day: g.officialDate || (g.gameDate || '').slice(0, 10),
       tbd: !!(g.status && g.status.startTimeTBD), state: state, detailed: detailed,
@@ -252,10 +261,21 @@
       inning: inning, outs: state === 'live' && typeof ls.outs === 'number' ? ls.outs : null,
       gameType: g.gameType, post: post, round: post ? (g.seriesDescription || '') : '',
       gameNum: g.seriesGameNumber || null, gamesInSeries: g.gamesInSeries || null, ifNec: g.ifNecessary === 'Y',
-      seriesStatus: ss ? { isTied: !!ss.isTied, wins: ss.wins, losses: ss.losses, winId: ss.winningTeam && ss.winningTeam.id, isOver: !!ss.isOver } : null,
+      seriesStatus: ss ? { isTied: !!ss.isTied, wins: cnt(ss.wins), losses: cnt(ss.losses), winId: ss.winningTeam && ss.winningTeam.id, isOver: !!ss.isOver } : null,
       tv: tv, probAway: prob('away'), probHome: prob('home')
     };
   };
+  /* One game's line score, decisions and venue (for the game-detail dialog). */
+  API.gameDetail = function (pk) {
+    return API.get('/schedule', { sportId: 1, gamePk: pk, hydrate: 'linescore,decisions,venue' }).then(function (j) {
+      var g = ((((j.dates || [])[0] || {}).games) || [])[0] || {}, ls = g.linescore || {}, dc = g.decisions || {}, tm = ls.teams || {};
+      function tot(t) { return t ? { r: score(t.runs), h: score(t.hits), e: score(t.errors) } : {}; }
+      return { innings: (ls.innings || []).map(function (i) { return { away: i.away ? score(i.away.runs) : null, home: i.home ? score(i.home.runs) : null }; }),
+        totals: { away: tot(tm.away), home: tot(tm.home) },
+        win: (dc.winner && dc.winner.fullName) || '', loss: (dc.loser && dc.loser.fullName) || '', save: (dc.save && dc.save.fullName) || '', venue: (g.venue && g.venue.name) || '' };
+    });
+  };
+
   var HYDRATE = 'team,linescore,probablePitcher,broadcasts(all),seriesStatus';
   API.schedule = function (startDate, endDate) {
     return API.get('/schedule', { sportId: 1, startDate: startDate, endDate: endDate, hydrate: HYDRATE }).then(function (j) {

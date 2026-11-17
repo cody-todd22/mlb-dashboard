@@ -17,6 +17,45 @@
     } catch (e) { return 'mlb'; }
   };
 
+  /* ───── saved settings are untrusted input ─────
+   * Anything read back from localStorage is checked before use: a value is kept only if it is a plain string,
+   * number or boolean of the same kind as the default it replaces, strings are capped, and the shared display
+   * settings are limited to their known choices and ranges (a bad TV rotation would otherwise spin the timer). */
+  X.cleanValue = function (def, v) {
+    var td = typeof def, tv = typeof v;
+    if (tv === 'boolean') return td === 'boolean' ? v : def;
+    if (tv === 'number') return isFinite(v) && (td === 'number' || td === 'string') ? v : def;
+    if (tv === 'string') return (td === 'string' || td === 'number') && v.length <= 300 ? v : def;
+    return def;
+  };
+  function oneOf(v, list, def) { return list.indexOf(v) >= 0 ? v : def; }
+  function clamp(v, lo, hi, def) { v = typeof v === 'number' ? v : parseInt(v, 10); return isFinite(v) ? Math.min(hi, Math.max(lo, Math.round(v))) : def; }
+  X.cleanShared = function (s) {
+    s.theme = oneOf(s.theme, ['auto', 'light', 'dark'], 'auto');
+    s.layout = oneOf(s.layout, ['standard', 'tv'], 'standard');
+    s.tvCharts = oneOf(s.tvCharts, ['all', 'chosen'], 'all');
+    s.tickerSpeed = oneOf(s.tickerSpeed, ['slow', 'normal', 'fast'], 'normal');
+    s.league = oneOf(s.league, ['mlb', 'college', 'nfl', 'cfb'], 'mlb');
+    s.tvRotate = clamp(s.tvRotate, 5, 600, 12);
+    s.limit = clamp(s.limit, 3, 25, 5);
+    s.ticker = s.ticker !== false; s.refresh = s.refresh !== false;
+    s.tvSports = String(s.tvSports || '').split(',').filter(function (x, i, a) { return ['mlb', 'college', 'nfl', 'cfb'].indexOf(x) >= 0 && a.indexOf(x) === i; }).join(',');
+    s.tvSportMins = clamp(s.tvSportMins, 1, 60, 5);
+    return s;
+  };
+  /* A relay / data address typed into Settings: https only (http is allowed for a copy on this computer),
+   * no credentials, query or fragment. Anything else is ignored and the default source is used. */
+  X.safeBase = function (v) {
+    v = String(v == null ? '' : v).trim();
+    if (!v || v.length > 300) return '';
+    try {
+      var u = new URL(v), local = /^(localhost|127\.0\.0\.1|\[::1\])$/.test(u.hostname);
+      if (u.protocol !== 'https:' && !(u.protocol === 'http:' && local)) return '';
+      if (u.username || u.password) return '';
+      return (u.origin + u.pathname).replace(/\/+$/, '');
+    } catch (e) { return ''; }
+  };
+
   /* Divisions in display order. */
   X.DIVISIONS = [
     { id: 201, name: 'AL East', league: 'AL' },
@@ -380,10 +419,13 @@
     tvRotate: 12,             // seconds per TV panel
     tvCharts: 'all',          // TV chart panel: all = cycle every feature chart, chosen = only the one picked under Feature chart
     refresh: true,
+    tvSports: '',             // TV layout: sports to rotate through, e.g. 'mlb,nfl' ('' = stay on one board)
+    tvSportMins: 5,           // minutes on each sport
     sampleLive: false,        // snapshot preview only
     blocks: {
       tile1: 'st:record', tile2: 'st:rd', tile3: 'hit:ops', tile4: 'pit:era',
       race: 'gap',            // feature chart: see FEATURE_GROUPS, or hide
+      news: 'show',           // headlines block
       raceStat: 'hitting:homeRuns',          // leader race stat
       titleStat: 'hitting:battingAverage',   // title race stat
       standings: 'show',

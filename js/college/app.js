@@ -3,10 +3,19 @@
 (function () {
   'use strict';
   var X = window.MLBX, C = X.College, API = C.API, CH = X.Charts;
-  var esc = CH.esc, rate3 = CH.rate3, signed = CH.signed;
+  var esc = CH.esc, rate3 = CH.rate3, signed = CH.signed, EX = X.Extras;
+  function isFavGame(g) { return EX.favGame('college', g.away.seo, g.home.seo); }
+  function favFirst(list) { return EX.favFirst('college', list, function (g) { return [g.away.seo, g.home.seo]; }); }
+  var STAR = '<span class="fav-star" aria-label="Favorite">★</span>';
+  function watchGames() {
+    var d = S.data; if (!d || d.source !== 'live' || !EX.favs('college').length) return;
+    EX.watch('college', (d.games || []).filter(isFavGame).map(function (g) {
+      return { pk: String(g.pk), state: g.state, a: { id: g.away.seo, label: abbr(g.away.seo, g.away.name), score: g.away.score }, h: { id: g.home.seo, label: abbr(g.home.seo, g.home.name), score: g.home.score } };
+    }));
+  }
   var LS_SHARED = 'mlb-live-board:settings', LS_COLLEGE = 'mlb-live-board:college';
-  var SHARED_KEYS = ['theme', 'layout', 'tvRotate', 'tvCharts', 'ticker', 'tickerSpeed', 'refresh', 'limit', 'league'];
-  var SHARED_DEFAULTS = { theme: 'auto', layout: 'standard', tvRotate: 12, tvCharts: 'all', ticker: true, tickerSpeed: 'normal', refresh: true, limit: 5, league: 'college' };
+  var SHARED_KEYS = ['theme', 'layout', 'tvRotate', 'tvCharts', 'tvSports', 'tvSportMins', 'ticker', 'tickerSpeed', 'refresh', 'limit', 'league'];
+  var SHARED_DEFAULTS = { theme: 'auto', layout: 'standard', tvRotate: 12, tvCharts: 'all', tvSports: '', tvSportMins: 5, ticker: true, tickerSpeed: 'normal', refresh: true, limit: 5, league: 'college' };
 
   var S = {
     settings: null, cs: null, scope: 'D1', view: 'dash', data: null, ext: {}, pendingExt: {},
@@ -68,11 +77,12 @@
   function writeJSON(k, v) { try { window.localStorage.setItem(k, JSON.stringify(v)); } catch (e) { /* storage unavailable */ } }
   function loadSettings() {
     var raw = readJSON(LS_SHARED) || {}, s = {};
-    SHARED_KEYS.forEach(function (k) { s[k] = raw[k] !== undefined ? raw[k] : SHARED_DEFAULTS[k]; });
+    SHARED_KEYS.forEach(function (k) { s[k] = raw[k] !== undefined ? X.cleanValue(SHARED_DEFAULTS[k], raw[k]) : SHARED_DEFAULTS[k]; });
+    X.cleanShared(s);
     var cs = clone(C.DEFAULT_SETTINGS), sc = readJSON(LS_COLLEGE);
     if (sc && typeof sc === 'object') {
-      Object.keys(cs).forEach(function (k) { if (k !== 'blocks' && sc[k] !== undefined) cs[k] = sc[k]; });
-      if (sc.blocks) Object.keys(cs.blocks).forEach(function (k) { if (sc.blocks[k] !== undefined) cs.blocks[k] = sc.blocks[k]; });
+      Object.keys(cs).forEach(function (k) { if (k !== 'blocks' && sc[k] !== undefined) cs[k] = X.cleanValue(cs[k], sc[k]); });
+      if (sc.blocks && typeof sc.blocks === 'object') Object.keys(cs.blocks).forEach(function (k) { if (sc.blocks[k] !== undefined) cs.blocks[k] = X.cleanValue(cs.blocks[k], sc.blocks[k]); });
     }
     var valid = { hide: true }; C.FEATURE_GROUPS.forEach(function (g) { g.options.forEach(function (o) { valid[o[0]] = true; }); });
     if (!valid[cs.blocks.race]) cs.blocks.race = 'gap';
@@ -158,6 +168,7 @@
         records: recordsFromList(r[0]), rankings: normRankings(r[1]), games: r[2], seasonGames: null, recs: null, partial: false };
       S.data.phase = phaseFor();
       S.ext = {}; S.pendingExt = {};
+      watchGames();
       startCrawl();
     });
   }
@@ -197,6 +208,7 @@
     var d = S.data;
     return loadWindow().then(function (gs) {
       d.games = gs; d.asOf = new Date().toISOString();
+      watchGames();
       if (d.seasonGames) mergeSeason(d.seasonGames);
       refreshTicker(); refreshMain(); refreshStatus();
     }).catch(function () { /* keep the last good scores */ });
@@ -226,16 +238,36 @@
     API.resetCache();
     loadLive().then(function () { render(); }).catch(function () { /* keep yesterday's data */ }).then(function () { scheduleScores(); scheduleDaily(); });
   }
+  var RETRY_AFTER = 120000;   // a failed load is asked for again after 2 minutes
+  function stale(v) { return v && !Array.isArray(v) && v.error && v.at && Date.now() - v.at >= RETRY_AFTER; }
+  /* Lazy loads, kept for the session. A failure is kept only RETRY_AFTER, then asked for again, so a block that
+     failed once doesn't stay blank until someone reloads the page. */
   function need(key, fn) {
     var v = S.ext[key];
-    if (v !== undefined) return v;
-    if (!isLive()) return { error: 'snapshot' };
+    if (v !== undefined && !stale(v)) return v;
+    if (v === undefined && !isLive()) return { error: 'snapshot' };
     if (!S.pendingExt[key]) {
       S.pendingExt[key] = true;
-      fn().then(function (r) { S.ext[key] = r; }, function (e) { S.ext[key] = { error: String((e && e.message) || e) }; })
+      var bag = S.ext;   // a reload swaps S.ext; a late answer must not land in the new one
+      fn().then(function (r) { bag[key] = r; }, function (e) { bag[key] = { error: String((e && e.message) || e), at: Date.now() }; })
         .then(function () { delete S.pendingExt[key]; queueRefresh(); });
     }
-    return undefined;
+    return v;
+  }
+  /* Every minute: re-ask for anything that failed more than 2 minutes ago, and if the board had to fall back
+     to the saved snapshot because the live source couldn't be reached, try live again every 5 minutes. */
+  function heal() {
+    if (S.stopped || !S.settings.refresh || !S.data) return;
+    var now = Date.now();
+    if (!isLive()) {
+      if (S.loadError && now - (S.healAt || 0) >= 5 * 60000) {
+        S.healAt = now;
+        loadLive().then(function () { if (S.stopped) return; S.loadError = null; render(); scheduleScores(); scheduleDaily(); }, function () { /* still down: stay on the snapshot */ });
+      }
+      return;
+    }
+    var due = Object.keys(S.ext).some(function (k) { return stale(S.ext[k]) && !S.pendingExt[k]; });
+    if (due) queueRefresh();
   }
   function isErr(v) { return v && !Array.isArray(v) && v.error; }
   var queued = false;
@@ -247,7 +279,7 @@
     var r = rk.rows.filter(function (x) { return x.seo === seo; })[0];
     return r ? r.rank : null;
   }
-  function rankTag(seo) { var r = rankOf(seo); return r ? '<span class="tk-rk">' + r + '</span>' : ''; }
+  function rankTag(seo) { var r = rankOf(seo); return r ? '<span class="tk-rk">' + esc(r) + '</span>' : ''; }
   function topSeos(n) { var rk = S.data.rankings; return rk ? rk.rows.filter(function (r) { return r.seo; }).slice(0, n).map(function (r) { return r.seo; }) : []; }
 
   /* ───────── stat lists ───────── */
@@ -507,7 +539,11 @@
     var doneSeries = d.phase === 'off' ? allSeries().filter(function (s) { return s.over && /Finals/.test(s.round); }) : [];
     var regFinals = finals.filter(function (g) { return !g.post && (g.day === today || g.day === yest); }).reverse();
     var out = [];
-    function sec(title, arr) { if (!arr.length) return; out.push({ k: 'head', text: title }); arr.forEach(function (i) { out.push(i); }); }
+    function sec(title, arr) {
+      if (!arr.length) return; out.push({ k: 'head', text: title });
+      var fav = arr.filter(function (i) { return i.g && isFavGame(i.g); });
+      fav.concat(arr.filter(function (i) { return fav.indexOf(i) < 0; })).forEach(function (i) { out.push(i); });
+    }
     function L(g) { return { k: 'live', g: g }; } function N(g) { return { k: 'next', g: g }; } function F(g) { return { k: 'final', g: g }; } function SR(s) { return { k: 'series', s: s }; }
     var seo = scopeTeam(), cid = scopeConf();
     if (isD1()) {
@@ -545,21 +581,21 @@
     if (it.k === 'note') return '<div class="tk-item"><span class="tk-team win">' + esc(it.text) + '</span></div>';
     if (it.k === 'series') {
       var s = it.s, pips = function (w) { var h = ''; for (var i = 0; i < s.need; i++) h += '<span class="pip' + (i < w ? ' on' : '') + '"></span>'; return h; };
-      return '<div class="tk-item"><span class="tk-sub">' + esc(roundShort(s.round)) + '</span><span class="tk-team win">' + rankTag(s.a) + esc(abbr(s.a)) + '</span><span class="pips" aria-label="' + s.aw + ' wins">' + pips(s.aw) + '</span>' +
-        '<span class="tk-team win">' + rankTag(s.b) + esc(abbr(s.b)) + '</span><span class="pips" aria-label="' + s.bw + ' wins">' + pips(s.bw) + '</span><span class="tk-sub">' + esc(seriesText(s)) + '</span></div>';
+      return '<div class="tk-item"><span class="tk-sub">' + esc(roundShort(s.round)) + '</span><span class="tk-team win">' + rankTag(s.a) + esc(abbr(s.a)) + '</span><span class="pips" aria-label="' + esc(s.aw) + ' wins">' + pips(s.aw) + '</span>' +
+        '<span class="tk-team win">' + rankTag(s.b) + esc(abbr(s.b)) + '</span><span class="pips" aria-label="' + esc(s.bw) + ' wins">' + pips(s.bw) + '</span><span class="tk-sub">' + esc(seriesText(s)) + '</span></div>';
     }
-    var g = it.g;
+    var g = it.g, at = '" data-game="' + esc(g.pk) + '">' + (isFavGame(g) ? STAR : '');
     if (it.k === 'live') {
       var aw = g.away.score > g.home.score, hw = g.home.score > g.away.score;
-      return '<div class="tk-item"><span class="tk-live">Live</span><span class="tk-team' + (aw ? ' win' : '') + '">' + tname(g.away) + ' ' + (g.away.score == null ? 0 : g.away.score) + '</span>' +
+      return '<div class="tk-item' + at + '<span class="tk-live">Live</span><span class="tk-team' + (aw ? ' win' : '') + '">' + tname(g.away) + ' ' + (g.away.score == null ? 0 : g.away.score) + '</span>' +
         '<span class="tk-team' + (hw ? ' win' : '') + '">' + tname(g.home) + ' ' + (g.home.score == null ? 0 : g.home.score) + '</span><span class="tk-sub">' + esc([g.inning, g.tv].filter(Boolean).join(' · ')) + '</span></div>';
     }
     if (it.k === 'final') {
       var aW = g.away.score > g.home.score;
-      return '<div class="tk-item"><span class="tk-final">Final</span><span class="tk-team ' + (aW ? 'win' : 'lose') + '">' + tname(g.away) + ' ' + g.away.score + '</span><span class="tk-team ' + (aW ? 'lose' : 'win') + '">' + tname(g.home) + ' ' + g.home.score + '</span>' +
+      return '<div class="tk-item' + at + '<span class="tk-final">Final</span><span class="tk-team ' + (aW ? 'win' : 'lose') + '">' + tname(g.away) + ' ' + esc(g.away.score) + '</span><span class="tk-team ' + (aW ? 'lose' : 'win') + '">' + tname(g.home) + ' ' + esc(g.home.score) + '</span>' +
         '<span class="tk-sub">' + esc([roundShort(g.round), whenLabel(g)].filter(Boolean).join(' · ')) + '</span></div>';
     }
-    return '<div class="tk-item"><span class="tk-when">' + esc(whenLabel(g) + ' ' + timeLabel(g)) + '</span><span class="tk-team win">' + tname(g.away) + ' <span class="tk-at">at</span> ' + tname(g.home) + '</span>' +
+    return '<div class="tk-item' + at + '<span class="tk-when">' + esc(whenLabel(g) + ' ' + timeLabel(g)) + '</span><span class="tk-team win">' + tname(g.away) + ' <span class="tk-at">at</span> ' + tname(g.home) + '</span>' +
       '<span class="tk-sub">' + esc([roundShort(g.round), g.tv].filter(Boolean).join(' · ')) + '</span></div>';
   }
   function tickerItemsHTML() {
@@ -794,7 +830,7 @@
     if (!rows.length) return '<div class="empty"><strong>No ranked players</strong>No ' + esc(who) + ' players are in the NCAA’s national list for this stat (top ' + (st.listSize || 'ranked') + ' qualified players).</div>';
     var shares = CH.shares(rows), counts = {};
     rows.forEach(function (r) { counts[r.rank] = (counts[r.rank] || 0) + 1; });
-    function rk(r) { return (counts[r.rank] > 1 ? 'T' : '') + r.rank; }
+    function rk(r) { return esc((counts[r.rank] > 1 ? 'T' : '') + r.rank); }
     var html;
     if (kind === 'feat') {
       html = '<div class="lb">' + rows.map(function (r, i) {
@@ -838,16 +874,17 @@
       var live = all.filter(function (g) { return g.state === 'live'; }), pre = all.filter(function (g) { return g.state === 'pre'; });
       all = live.sort(rankFirst).concat(pre.filter(ranked).concat(pre.filter(function (g) { return !ranked(g); })));
     }
-    return all.slice(0, n);
+    return favFirst(all.filter(function (g) { return g.state === 'live'; })).concat(favFirst(all.filter(function (g) { return g.state !== 'live'; }))).slice(0, n);
   }
   function gameCardHTML(g) {
     var cls = g.state === 'live' ? ' live' : (whenLabel(g) === 'Today' ? ' today' : '');
     var s = seriesFor(g);
     var hd = g.state === 'live' ? 'Live · ' + esc(g.inning || 'In progress') : esc(whenLabel(g) + ' · ' + timeLabel(g));
-    var match = g.state === 'live' ? tname(g.away) + ' ' + g.away.score + ' <span class="at">·</span> ' + tname(g.home) + ' ' + g.home.score : tname(g.away) + ' <span class="at">at</span> ' + tname(g.home);
+    var match = g.state === 'live' ? tname(g.away) + ' ' + esc(g.away.score) + ' <span class="at">·</span> ' + tname(g.home) + ' ' + esc(g.home.score) : tname(g.away) + ' <span class="at">at</span> ' + tname(g.home);
     var line = [roundName(g.round), s ? seriesText(s) : ''].filter(Boolean).join(' · ');
     var sub = [team(g.away.seo) ? team(g.away.seo).school : g.away.name, team(g.home.seo) ? team(g.home.seo).school : g.home.name].join(' at ');
-    return '<div class="game' + cls + '"><div class="game-hd"><span>' + hd + '</span><span>' + esc(g.tv) + '</span></div><div class="game-bd"><div class="game-m">' + match + '</div>' +
+    var fav = isFavGame(g);
+    return '<div class="game' + cls + (fav ? ' fav' : '') + '" data-game="' + esc(g.pk) + '" tabindex="0" role="button" aria-label="Game detail"><div class="game-hd"><span>' + (fav ? STAR : '') + hd + '</span><span>' + esc(g.tv) + '</span></div><div class="game-bd"><div class="game-m">' + match + '</div>' +
       (line ? '<div class="game-s">' + esc(line) + '</div>' : '') + '<div class="game-p">' + esc(sub) + '</div></div></div>';
   }
   function noGamesHTML() {
@@ -891,6 +928,8 @@
       var up = upcoming(6);
       out.push('<section aria-label="Coming up" style="display:flex;flex-direction:column;gap:10px"><h2 class="sec-title">Coming up</h2>' + (up.length ? '<div class="games">' + up.map(gameCardHTML).join('') + '</div>' : noGamesHTML()) + '</section>');
     }
+    var nw = newsCard(false);
+    if (nw) out.push('<section class="card" aria-label="Headlines"><div class="card-hd"><h2>' + esc(nw.title) + '</h2><span class="sub">' + esc(nw.sub) + '</span></div>' + nw.body + '</section>');
     out.push(footHTML());
     return out.join('');
   }
@@ -899,6 +938,33 @@
     var src = d && d.source === 'snapshot' ? 'Snapshot of NCAA API data (final 2026 season) · live data could not be reached here'
       : 'Data: NCAA API (ncaa.com) · Poll: D1Baseball.com Top 25 · stats refresh daily at 5 AM' + (d && d.statsUpdated ? ' · NCAA stats ' + d.statsUpdated.replace(/^.* - /, '').toLowerCase() : '');
     return '<footer class="foot"><span>' + esc(src) + '</span><span>Times shown in your time zone</span></footer>';
+  }
+
+  /* ───────── game detail (dialog) ─────────
+     The NCAA feed has no box score the board can rely on, so this shows what the board already knows:
+     the score, records and ranks, and how the two teams have done against each other and lately. */
+  function gameDetail(pk) {
+    var d = S.data, pool = (d.games || []).concat(d.seasonGames || []);
+    var g = pool.filter(function (x) { return String(x.pk) === String(pk); })[0]; if (!g) return null;
+    var pre = g.state === 'pre', fin = g.state === 'final', aW = fin && g.away.score > g.home.score, hW = fin && g.home.score > g.away.score;
+    function side(s, win) {
+      var t = team(s.seo), r = d.records && d.records[s.seo], rk = rankOf(s.seo);
+      return { name: t ? t.school : (s.name || 'TBD'), color: t ? t.primary : '#888', score: pre ? null : s.score, win: win, sub: [rk ? 'No. ' + rk : '', r ? wl(r.w, r.l, r.t) : ''].filter(Boolean).join(' · ') };
+    }
+    var status = g.state === 'live' ? 'Live · ' + (g.inning || 'In progress') : (fin ? 'Final · ' + whenLabel(g) : (g.state === 'off' ? 'Postponed' : whenLabel(g) + ' · ' + timeLabel(g)));
+    var sr = seriesFor(g);
+    var html = EX.detailHead({ away: side(g.away, aW), home: side(g.home, hW), status: status, lines: [[roundName(g.round), sr ? seriesText(sr) : '', g.tv].filter(Boolean).join(' · ')] });
+    var season = (d.seasonGames || []).filter(function (x) { return x.state === 'final' && x.away.score != null && x.home.score != null; });
+    function line(x) { return abbr(x.away.seo, x.away.name) + ' ' + x.away.score + ', ' + abbr(x.home.seo, x.home.name) + ' ' + x.home.score; }
+    function day(x) { return new Date(x.date).toLocaleDateString([], { month: 'short', day: 'numeric' }); }
+    var h2h = season.filter(function (x) { return involves(x, g.away.seo) && involves(x, g.home.seo) && String(x.pk) !== String(g.pk); }).slice(-6);
+    html += EX.detailList('This season’s meetings', h2h.map(function (x) { return [day(x), line(x)]; }));
+    [g.away, g.home].forEach(function (s) {
+      var last = season.filter(function (x) { return involves(x, s.seo) && String(x.pk) !== String(g.pk); }).slice(-5).reverse();
+      html += EX.detailList((team(s.seo) ? team(s.seo).school : s.name) + ' · last ' + last.length, last.map(function (x) { return [day(x), line(x)]; }));
+    });
+    if (!season.length) html += '<div class="empty">Recent results appear once the season’s scoreboards have loaded.</div>';
+    return { title: abbr(g.away.seo, g.away.name) + ' at ' + abbr(g.home.seo, g.home.name), html: html };
   }
 
   /* ───────── TV layout ───────── */
@@ -911,10 +977,32 @@
     var i = out.indexOf(chosen); if (i > 0) out = out.slice(i).concat(out.slice(0, i));
     return out.length ? out : [chosen];
   }
-  function tvCharts() { var c = tvChartModes().map(function (m) { return 'race:' + m; }); if (S.cs.blocks.clubs && S.cs.blocks.clubs !== 'hide') c.push('clubs'); return c; }
+  function newsCard(tv) {
+    if (S.cs.blocks.news === 'hide' || !isLive()) return null;
+    return EX.newsCard('college', '', 'College baseball', null, tv);
+  }
+  function liveGames() {
+    var d = S.data, live = d && isLive() ? (d.games || []).filter(function (g) { return g.state === 'live' && involvesScope(g); }) : [];
+    if (isD1()) live = live.filter(function (g) { return ranked(g) || isFavGame(g) || g.post; }).sort(rankFirst);
+    return favFirst(live).slice(0, 6);
+  }
+  function spotlightCard(pk) {
+    var g = (S.data.games || []).filter(function (x) { return String(x.pk) === pk && x.state === 'live'; })[0]; if (!g) return null;
+    function side(s) { var t = team(s.seo); return { name: t ? t.school : (s.name || 'TBD'), color: t ? t.primary : '#888', score: s.score, rank: rankOf(s.seo) }; }
+    var sr = seriesFor(g);
+    return { title: 'Live now', sub: roundName(g.round) || 'College baseball',
+      body: EX.spotlight({ away: side(g.away), home: side(g.home), status: g.inning || 'In progress', note: sr ? seriesText(sr) : '', tv: g.tv, fav: isFavGame(g) }) };
+  }
+  function tvCharts() {
+    var c = tvChartModes().map(function (m) { return 'race:' + m; }); if (S.cs.blocks.clubs && S.cs.blocks.clubs !== 'hide') c.push('clubs');
+    if (S.cs.blocks.news !== 'hide' && isLive()) c.push('news');
+    return EX.weave(c, liveGames().map(function (g) { return 'live:' + g.pk; }));
+  }
   function progressHTML(n, i) { if (n < 2) return ''; var h = '<div class="tv-progress" aria-hidden="true">'; for (var k = 0; k < n; k++) h += '<i class="' + (k === i ? 'on' : '') + '"></i>'; return h + '</div>'; }
   function tvCard(which) {
     if (which === 'clubs') { var c = clubsCardHTML(); return c ? { title: c.title, sub: c.legend + ' highlighted', body: c.body } : null; }
+    if (which === 'news') { var nw = newsCard(true); return nw && !nw.empty ? nw : null; }
+    if (which.indexOf('live:') === 0) return spotlightCard(which.slice(5));
     return featureChart(true, which.slice(5));
   }
   /* Shows the chart at S.tv.chart; a chart with nothing to show (no data yet, snapshot-only, still loading) is passed over
@@ -949,8 +1037,8 @@
     return '<div class="tv-games">' + up.map(function (g) {
       var s = seriesFor(g);
       var when = g.state === 'live' ? '<b>Live</b>' + esc(g.inning) : '<b>' + esc(whenLabel(g)) + '</b>' + esc(timeLabel(g));
-      var m = g.state === 'live' ? tname(g.away) + ' ' + g.away.score + ' · ' + tname(g.home) + ' ' + g.home.score : tname(g.away) + ' at ' + tname(g.home);
-      return '<div class="tv-game"><div class="when">' + when + '</div><div><div class="m">' + m + '</div><div class="s">' + esc([roundShort(g.round), s ? seriesText(s) : '', g.tv].filter(Boolean).join(' · ')) + '</div></div></div>';
+      var m = g.state === 'live' ? tname(g.away) + ' ' + esc(g.away.score) + ' · ' + tname(g.home) + ' ' + esc(g.home.score) : tname(g.away) + ' at ' + tname(g.home);
+      return '<div class="tv-game' + (isFavGame(g) ? ' fav' : '') + '"><div class="when">' + when + '</div><div><div class="m">' + (isFavGame(g) ? STAR : '') + m + '</div><div class="s">' + esc([roundShort(g.round), s ? seriesText(s) : '', g.tv].filter(Boolean).join(' · ')) + '</div></div></div>';
     }).join('') + '</div>';
   }
   function tvStackHTML() {
@@ -1000,7 +1088,7 @@
   function statOptions(current) {
     var h = '<option value="hide"' + (current === 'hide' ? ' selected' : '') + '>Hide this block</option>';
     C.STAT_GROUPS.forEach(function (g) {
-      h += '<optgroup label="' + g.label + '">' + C.STATS.filter(function (s) { return s.group === g.id; }).map(function (s) {
+      h += '<optgroup label="' + esc(g.label) + '">' + C.STATS.filter(function (s) { return s.group === g.id; }).map(function (s) {
         return '<option value="' + s.key + '"' + (s.key === current ? ' selected' : '') + '>' + esc(s.short + ' · ' + s.name) + '</option>';
       }).join('') + '</optgroup>';
     });
@@ -1010,7 +1098,7 @@
     var h = '<option value="hide"' + (current === 'hide' ? ' selected' : '') + '>Hide this block</option>';
     C.METRIC_GROUPS.forEach(function (g) {
       var list = C.TEAM_METRICS.filter(function (m) { return (m.grp || m.src) === g.src && (!numericOnly || ['record', 'streak', 'l10', 'home', 'away', 'conf'].indexOf(m.fmt) < 0 || m.id === 'record'); });
-      h += '<optgroup label="' + g.label + '">' + list.map(function (m) { return '<option value="' + m.key + '"' + (m.key === current ? ' selected' : '') + '>' + esc(m.label + ' (' + m.short + ')') + '</option>'; }).join('') + '</optgroup>';
+      h += '<optgroup label="' + esc(g.label) + '">' + list.map(function (m) { return '<option value="' + m.key + '"' + (m.key === current ? ' selected' : '') + '>' + esc(m.label + ' (' + m.short + ')') + '</option>'; }).join('') + '</optgroup>';
     });
     return h;
   }
@@ -1054,6 +1142,7 @@
       '<div class="field"><span class="flabel">Ticker</span>' + segHTML('ticker', s.ticker, [[true, 'On'], [false, 'Off']]) + '</div>' +
       '<div class="field"><span class="flabel">Ticker speed</span>' + segHTML('tickerSpeed', s.tickerSpeed, [['slow', 'Slow'], ['normal', 'Normal'], ['fast', 'Fast']]) + '</div>' +
       '</div></section>' +
+      EX.settingsHTML('college', C.TEAMS.map(function (t) { return [t.seo, t.school]; }).sort(function (a, z) { return a[1] < z[1] ? -1 : 1; }), cs.blocks.news === 'hide' ? 'hide' : 'show', s) +
       '<section class="set-sec" aria-labelledby="sec-data"><div class="card-hd"><h2 id="sec-data">Data</h2><span class="sub">NCAA API</span></div><div class="set-body">' +
       '<div class="field"><label for="set-defaultScope">Default view</label><select class="set-select" id="set-defaultScope" data-cset="defaultScope">' + defOpts + '</select><span class="hint">The board opens on this view. Changing it also switches the board now.</span></div>' +
       '<div class="field"><label for="set-apiBase">NCAA data address</label><input class="set-input" id="set-apiBase" data-cset="apiBase" type="url" inputmode="url" spellcheck="false" placeholder="' + esc(C.API_DEFAULT) + '" value="' + esc(cs.apiBase) + '">' + apiNote + '</div>' +
@@ -1166,7 +1255,7 @@
   /* ───────── boot ───────── */
   function stop() {
     S.stopped = true;
-    clearTimeout(S.timers.sched); clearTimeout(S.timers.daily); clearInterval(S.tv.timer);
+    clearTimeout(S.timers.sched); clearTimeout(S.timers.daily); clearTimeout(S.timers.fit); clearInterval(S.timers.heal); clearInterval(S.tv.timer);
     if (TK.raf) window.cancelAnimationFrame(TK.raf);
     releaseWake();
   }
@@ -1183,7 +1272,10 @@
     saveSettings();
     S.scope = validScope(S.cs.defaultScope) ? S.cs.defaultScope : 'D1';
     try { if (window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches) S.tickPaused = true; } catch (e) { /* ignore */ }
-    if (location.hash === '#settings' || (opts && opts.view === 'settings')) S.view = 'settings';
+    if (opts && opts.view === 'dash') S.view = 'dash';
+    else if (location.hash === '#settings' || (opts && opts.view === 'settings')) S.view = 'settings';
+    EX.attach('college', { render: render, refresh: queueRefresh, settings: function () { return S.settings; }, save: saveSettings, isTV: isTV, detail: gameDetail,
+      setBlock: function (k, v) { S.cs.blocks[k] = v; saveSettings(); render(); } });
     var app = document.getElementById('app');
     app.addEventListener('click', onClick);
     app.addEventListener('change', onChange);
@@ -1200,6 +1292,7 @@
     render();
     TK.raf = window.requestAnimationFrame(tickStep);
     loadLive().catch(function (err) { useSnapshot(err); }).then(function () { if (S.stopped) return; render(); scheduleScores(); scheduleDaily(); });
+    clearInterval(S.timers.heal); S.timers.heal = setInterval(heal, 60000);
   }
   X.CollegeApp = { state: S, render: render, refresh: refreshMain, boot: boot, stop: stop };
   X.APPS = X.APPS || {}; X.APPS.college = X.CollegeApp;

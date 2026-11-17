@@ -363,7 +363,7 @@
       v: 1, defaultScope: 'ALL', relay: '',
       blocks: {
         tile1: 'st:record', tile2: 'st:ppg', tile3: 'st:oppg', tile4: 'st:diff',
-        race: 'gap', standings: 'show', clubs: 'st:diff', upnext: 'show',
+        race: 'gap', standings: 'show', clubs: 'st:diff', upnext: 'show', news: 'show',
         feat1: 'passing.passingYards', feat2: 'rushing.rushingYards',
         board1: 'passing.passingTouchdowns', board2: 'receiving.receivingYards', board3: 'receiving.receptions',
         board4: 'defensive.sacks', board5: 'defensiveInterceptions.interceptions', board6: 'defensive.totalTackles'

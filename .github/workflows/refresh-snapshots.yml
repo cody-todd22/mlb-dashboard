@@ -1,0 +1,45 @@
+# Rebuilds the boards' offline snapshots once a week, so a board that can't reach its data source
+# still shows recent numbers. Runs the same data code the boards use (tools/build-snapshots.mjs).
+# No secrets are needed. A commit is made only when a snapshot actually changed, and your host
+# (Netlify) redeploys from that commit as usual.
+#
+# Run it by hand any time: GitHub → Actions → "Refresh offline snapshots" → Run workflow.
+name: Refresh offline snapshots
+
+on:
+  schedule:
+    - cron: '17 10 * * 2'   # Tuesdays 10:17 UTC (early morning in the US), after the weekend's games
+  workflow_dispatch:
+
+permissions:
+  contents: write           # only so the job can commit the rebuilt snapshot files
+
+concurrency:
+  group: refresh-snapshots
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Rebuild snapshots
+        run: node tools/build-snapshots.mjs
+      - name: Check the rebuilt files load
+        run: |
+          for f in js/snapshot.js js/college/snapshot.js js/football/snapshot.js; do node --check "$f"; done
+      - name: Commit if anything changed
+        run: |
+          if git diff --quiet -- js/snapshot.js js/college/snapshot.js js/football/snapshot.js; then
+            echo "Snapshots unchanged."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add js/snapshot.js js/college/snapshot.js js/football/snapshot.js
+          git commit -m "Refresh offline snapshots"
+          git push

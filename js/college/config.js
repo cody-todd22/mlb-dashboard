@@ -498,7 +498,7 @@
     apiBase: '',
     blocks: {
       tile1: 'st:record', tile2: 't213', tile3: 't210', tile4: 't211',
-      race: 'gap', standings: 'show', clubs: 'st:rdiff', upnext: 'show',
+      race: 'gap', standings: 'show', clubs: 'st:rdiff', upnext: 'show', news: 'show',
       feat1: 'i201', feat2: 'i207',
       board1: 'i200', board2: 'i202', board3: 'i338', board4: 'i206', board5: 'i205', board6: 'i596'
     }
